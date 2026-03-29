@@ -368,6 +368,91 @@ async def fetch_srwr_roadworks() -> list:
     return []
 
 
+async def fetch_ara_tros() -> list:
+    """Fetch live TTROs from Ayrshire Roads Alliance GeoJSON API."""
+    results = []
+    url = "https://ara.roadsonline.co.uk/ARA/TTRO/MapData/Restrictions"
+
+    async with httpx.AsyncClient(timeout=20, follow_redirects=True) as client:
+        try:
+            resp = await client.get(url, headers={"Accept": "application/json"})
+            if resp.status_code == 200:
+                geojson = resp.json()
+                features = geojson.get("features", [])
+
+                # Deduplicate by restriction ID (many line segments per restriction)
+                seen_ids = set()
+                for feat in features:
+                    props = feat.get("properties", {})
+                    rid = props.get("id") or props.get("reference", "")
+                    if rid in seen_ids:
+                        continue
+                    seen_ids.add(rid)
+
+                    # Get centroid from geometry
+                    geom = feat.get("geometry", {})
+                    coords = geom.get("coordinates", [])
+                    if geom["type"] == "Point":
+                        lon, lat = coords[0], coords[1]
+                    elif geom["type"] == "LineString" and coords:
+                        mid = coords[len(coords) // 2]
+                        lon, lat = mid[0], mid[1]
+                    else:
+                        continue
+
+                    title = props.get("title", "Unknown TRO")
+                    rtype = props.get("type", "unknown")
+                    road = props.get("road", "")
+                    town = props.get("town", "")
+                    dates = props.get("restrictionsInPlace", "")
+                    ref = props.get("reference", "")
+                    is_urgent = props.get("isUrgent", False)
+
+                    # Map ARA types to severity
+                    severity_map = {
+                        "roadClosure": "red",
+                        "trafficSignalPermit": "amber",
+                        "parking": "purple",
+                        "speedLimit": "blue",
+                    }
+                    severity = severity_map.get(rtype, "purple")
+                    if is_urgent:
+                        severity = "red"
+
+                    desc_parts = []
+                    if road:
+                        desc_parts.append(f"Road: {road}")
+                    if town:
+                        desc_parts.append(f"Town: {town}")
+                    if dates:
+                        desc_parts.append(f"Period: {dates}")
+                    if ref:
+                        desc_parts.append(f"Ref: {ref}")
+                    desc_parts.append(f"Type: {rtype}")
+
+                    results.append({
+                        "id": f"ara-{ref or rid}",
+                        "type": "tro",
+                        "title": title,
+                        "description": " | ".join(desc_parts),
+                        "lat": lat,
+                        "lon": lon,
+                        "severity": severity,
+                        "source": "Ayrshire Roads Alliance",
+                        "url": f"https://ara.roadsonline.co.uk/ARA/TTRO/Map",
+                        "pub_date": dates.split(" - ")[0] if " - " in dates else "",
+                        "active": True,
+                    })
+
+                log.info(f"ARA TROs: got {len(results)} live restrictions (from {len(features)} features)")
+            else:
+                log.warning(f"ARA TRO API returned {resp.status_code}")
+        except Exception as e:
+            log.warning(f"ARA TRO fetch failed: {e}")
+
+    return results
+
+
 async def generate_flow_data() -> list:
     """Generate traffic flow data for major Ayrshire routes.
     
@@ -444,17 +529,18 @@ async def generate_flow_data() -> list:
 
 async def fetch_all_data() -> dict:
     """Fetch all data sources concurrently."""
-    ts_incidents, ts_roadworks, osm, srwr, flow = await asyncio.gather(
+    ts_incidents, ts_roadworks, osm, srwr, flow, tros = await asyncio.gather(
         fetch_tsis_incidents(),
         fetch_tsis_roadworks(),
         fetch_overpass_incidents(),
         fetch_srwr_roadworks(),
         generate_flow_data(),
+        fetch_ara_tros(),
         return_exceptions=True,
     )
 
     all_items = []
-    for result in [ts_incidents, ts_roadworks, osm, srwr, flow]:
+    for result in [ts_incidents, ts_roadworks, osm, srwr, flow, tros]:
         if isinstance(result, list):
             all_items.extend(result)
 
@@ -497,6 +583,7 @@ async def fetch_all_data() -> dict:
                 1 if ts_roadworks and not isinstance(ts_roadworks, Exception) else 0,
                 1,  # OSM / Overpass
                 1,  # Flow
+                1 if tros and not isinstance(tros, Exception) else 0,  # ARA + Transport Scotland TROs
             ]),
         },
     }
@@ -625,15 +712,98 @@ async def get_nuro_stats():
     else:
         congestion_score = 0
 
+    total_incidents = meta.get("total_incidents", 0)
+    total_roadworks = meta.get("total_roadworks", 0)
+    sources_active = meta.get("sources_active", 0)
+    updated_at = meta.get("updated_at")
+
+    # Severity based on incidents
+    inc_severity = "critical" if total_incidents > 5 else "warning" if total_incidents > 0 else "ok"
+    cong_severity = "critical" if congestion_score > 60 else "warning" if congestion_score > 30 else "ok"
+
+    # Build v2 streams for nuro adaptive viz
+    streams = [
+        {
+            "id": "incidents",
+            "type": "scalar",
+            "value": total_incidents,
+            "label": "Active Incidents",
+            "unit": "",
+            "render": "stat",
+            "range": [0, 20],
+            "thresholds": {"good": 0, "warn": 3, "crit": 8},
+            "severity": inc_severity,
+            "updated": updated_at,
+        },
+        {
+            "id": "roadworks",
+            "type": "scalar",
+            "value": total_roadworks,
+            "label": "Roadworks",
+            "unit": "active",
+            "render": "stat",
+            "range": [0, 100],
+            "thresholds": {"good": 20, "warn": 40, "crit": 60},
+            "severity": "warning" if total_roadworks > 30 else "ok",
+            "updated": updated_at,
+        },
+        {
+            "id": "congestion",
+            "type": "scalar",
+            "value": congestion_score,
+            "label": "Congestion",
+            "unit": "%",
+            "render": "gauge",
+            "range": [0, 100],
+            "thresholds": {"good": 25, "warn": 50, "crit": 75},
+            "severity": cong_severity,
+            "updated": updated_at,
+        },
+        {
+            "id": "sources",
+            "type": "scalar",
+            "value": sources_active,
+            "label": "Data Sources",
+            "unit": "active",
+            "render": "badge",
+            "severity": "ok" if sources_active >= 3 else "warning",
+            "updated": updated_at,
+        },
+    ]
+
+    # Per-road flow streams
+    for f in flow[:8]:
+        fd = f.get("flow_data", {})
+        speed = fd.get("current_speed", 0)
+        free_flow = fd.get("free_flow_speed", 60)
+        route = fd.get("route", f.get("title", "Unknown"))
+        cong = fd.get("congestion_level", 0)
+        streams.append({
+            "id": f"flow_{route.lower().replace(' ', '_')}",
+            "type": "scalar",
+            "value": speed,
+            "label": route,
+            "unit": "km/h",
+            "render": "bar",
+            "range": [0, free_flow],
+            "thresholds": {"good": free_flow * 0.7, "warn": free_flow * 0.4, "crit": free_flow * 0.2},
+            "severity": "critical" if cong > 0.6 else "warning" if cong > 0.3 else "ok",
+            "updated": updated_at,
+        })
+
     return {
         "service": "ayrtraffic",
+        "version": "2.0",
+        "label": "AyrTraffic",
+        "icon": "🚦",
+        "url": "https://traffic.ayrshire.wispayr.online",
         "status": "online",
-        "total_incidents": meta.get("total_incidents", 0),
-        "active_roadworks": meta.get("total_roadworks", 0),
+        "total_incidents": total_incidents,
+        "active_roadworks": total_roadworks,
         "congestion_score": congestion_score,
-        "sources_active": meta.get("sources_active", 0),
-        "last_updated": meta.get("updated_at"),
-        "url": f"http://localhost:{PORT}",
+        "sources_active": sources_active,
+        "last_updated": updated_at,
+        "streams": streams,
     }
 
 
