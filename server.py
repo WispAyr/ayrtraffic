@@ -453,77 +453,99 @@ async def fetch_ara_tros() -> list:
     return results
 
 
-async def generate_flow_data() -> list:
-    """Generate traffic flow data for major Ayrshire routes.
-    
-    In production, this would use TomTom or HERE Traffic Flow API.
-    We generate realistic synthetic data based on time of day and known routes.
-    """
-    hour = datetime.now().hour
-    # Rush hours = higher congestion
-    is_rush = 7 <= hour <= 9 or 16 <= hour <= 18
+TOMTOM_API_KEY = "KkNkcnBcWERbYBeSXUPV9DN1VWZOWbal"
 
-    major_routes = [
-        # (name, waypoints, base_speed, road_ref)
-        ("A77 Ayr Bypass", [(55.47, -4.61), (55.49, -4.58), (55.51, -4.55)], 70, "A77"),
-        ("A77 South Ayr", [(55.43, -4.64), (55.45, -4.63), (55.47, -4.62)], 60, "A77"),
-        ("A78 Coast Road", [(55.55, -4.72), (55.60, -4.75), (55.65, -4.77)], 60, "A78"),
-        ("A70 East Ayrshire", [(55.47, -4.50), (55.48, -4.44), (55.49, -4.38)], 60, "A70"),
-        ("A71 Kilmarnock", [(55.61, -4.49), (55.60, -4.43), (55.59, -4.35)], 60, "A71"),
-        ("A76 Kilmarnock Road", [(55.60, -4.50), (55.56, -4.55), (55.53, -4.58)], 50, "A76"),
-        ("A736 Irvine Road", [(55.62, -4.63), (55.63, -4.68), (55.64, -4.72)], 60, "A736"),
+
+async def generate_flow_data() -> list:
+    """Fetch real-time traffic flow from TomTom for major Ayrshire roads."""
+
+    # Probe points on key Ayrshire roads (lat, lon, road_name, road_ref)
+    PROBE_POINTS = [
+        (55.4750, -4.5900, "A77 Ayr Bypass", "A77"),
+        (55.4400, -4.6350, "A77 South Ayr", "A77"),
+        (55.5800, -4.7400, "A78 Irvine to Saltcoats", "A78"),
+        (55.6300, -4.7700, "A78 Ardrossan", "A78"),
+        (55.4800, -4.4400, "A70 Ayr to Cumnock", "A70"),
+        (55.6100, -4.4900, "A71 Kilmarnock", "A71"),
+        (55.5600, -4.5500, "A76 Kilmarnock Road", "A76"),
+        (55.6300, -4.6800, "A736 Irvine Road", "A736"),
+        (55.5430, -4.6600, "A79 Troon", "A79"),
+        (55.3540, -4.6810, "A77 Maybole", "A77"),
+        (55.6115, -4.4955, "Kilmarnock Centre", "A"),
+        (55.4583, -4.6292, "Ayr Centre", "A"),
+        (55.5560, -4.7750, "Irvine Centre", "A"),
+        (55.6410, -4.8120, "Ardrossan Harbour", "A"),
+        (55.2420, -4.8580, "A77 Girvan", "A77"),
+        (55.7530, -4.8530, "A78 Fairlie to Largs", "A78"),
+        (55.4540, -4.2660, "A76 Cumnock", "A76"),
     ]
 
-    import random
-    rng = random.Random(int(time.time() / 300))  # changes every 5 mins
-
     results = []
-    for name, waypoints, base_speed, ref in major_routes:
-        # Simulate speed variation
-        speed_factor = 1.0
-        if is_rush:
-            speed_factor = rng.uniform(0.4, 0.8)
-        else:
-            speed_factor = rng.uniform(0.7, 1.0)
+    async with httpx.AsyncClient(timeout=10) as client:
+        for lat, lon, name, ref in PROBE_POINTS:
+            try:
+                url = (
+                    f"https://api.tomtom.com/traffic/services/4/flowSegmentData/"
+                    f"absolute/10/json?key={TOMTOM_API_KEY}&point={lat},{lon}"
+                )
+                resp = await client.get(url)
+                if resp.status_code == 200:
+                    data = resp.json().get("flowSegmentData", {})
+                    current_speed = data.get("currentSpeed", 0)
+                    free_flow = data.get("freeFlowSpeed", 60)
+                    road_closure = data.get("roadClosure", False)
+                    confidence = data.get("confidence", 0)
 
-        current_speed = base_speed * speed_factor
-        congestion = 1 - speed_factor
+                    if free_flow > 0:
+                        congestion = max(0, 1 - (current_speed / free_flow))
+                    else:
+                        congestion = 0
 
-        if congestion > 0.5:
-            severity = "red"
-            status = "Heavy Traffic"
-        elif congestion > 0.3:
-            severity = "amber"
-            status = "Moderate Traffic"
-        else:
-            severity = "green"
-            status = "Free Flow"
+                    if road_closure:
+                        severity = "red"
+                        status = "Road Closed"
+                    elif congestion > 0.5:
+                        severity = "red"
+                        status = "Heavy Traffic"
+                    elif congestion > 0.3:
+                        severity = "amber"
+                        status = "Moderate Traffic"
+                    else:
+                        severity = "green"
+                        status = "Free Flow"
 
-        # Use centre waypoint as marker position
-        mid = waypoints[len(waypoints) // 2]
-        results.append({
-            "id": f"flow-{ref}-{name.replace(' ', '-').lower()}",
-            "type": "flow",
-            "title": f"{name}: {status}",
-            "description": f"Current speed: ~{int(current_speed)} km/h | Free flow: {base_speed} km/h | Route: {ref}",
-            "lat": mid[0],
-            "lon": mid[1],
-            "severity": severity,
-            "source": "Traffic Flow",
-            "url": "",
-            "pub_date": datetime.now(timezone.utc).isoformat(),
-            "active": True,
-            "flow_data": {
-                "route": name,
-                "road_ref": ref,
-                "current_speed": round(current_speed, 1),
-                "free_flow_speed": base_speed,
-                "congestion_level": round(congestion, 2),
-                "status": status,
-                "waypoints": waypoints,
-            },
-        })
+                    # Extract road geometry from TomTom response
+                    coords = data.get("coordinates", {}).get("coordinate", [])
 
+                    results.append({
+                        "id": f"flow-{ref}-{name.replace(' ', '-').lower()}",
+                        "type": "flow",
+                        "title": f"{name}: {status}",
+                        "description": f"Speed: {int(current_speed)} km/h | Free flow: {free_flow} km/h | Confidence: {confidence:.0%}",
+                        "lat": lat,
+                        "lon": lon,
+                        "severity": severity,
+                        "source": "TomTom",
+                        "url": "",
+                        "pub_date": datetime.now(timezone.utc).isoformat(),
+                        "active": True,
+                        "flow_data": {
+                            "route": name,
+                            "road_ref": ref,
+                            "current_speed": round(current_speed, 1),
+                            "free_flow_speed": free_flow,
+                            "congestion_level": round(congestion, 2),
+                            "status": status,
+                            "road_closure": road_closure,
+                            "confidence": confidence,
+                            "geometry": [{"lat": c["latitude"], "lon": c["longitude"]} for c in coords[:20]],
+                        },
+                    })
+            except Exception as e:
+                log.warning(f"TomTom flow probe failed for {name}: {e}")
+                continue
+
+    log.info(f"TomTom: got {len(results)} flow segments from {len(PROBE_POINTS)} probes")
     return results
 
 
