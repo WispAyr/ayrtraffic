@@ -1,0 +1,984 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AyrTraffic — Live Ayrshire Traffic</title>
+  
+  <!-- Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  
+  <!-- Leaflet -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  
+  <!-- Leaflet Heat -->
+  <script src="https://unpkg.com/leaflet.heat@0.2.0/dist/leaflet-heat.js"></script>
+
+  <style>
+    :root {
+      --brand-blue: #2563eb;
+      --brand-blue-dim: #1d4ed8;
+      --bg-dark: #0f1117;
+      --bg-card: #1a1d27;
+      --bg-panel: #13161f;
+      --border: #2a2d3a;
+      --text: #e2e8f0;
+      --text-muted: #94a3b8;
+      --red: #ef4444;
+      --amber: #f59e0b;
+      --green: #22c55e;
+      --purple: #8b5cf6;
+      --status-height: 44px;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: 'Inter', -apple-system, sans-serif;
+      background: var(--bg-dark);
+      color: var(--text);
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    /* ── Status Bar ── */
+    #statusbar {
+      height: var(--status-height);
+      background: var(--bg-panel);
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      padding: 0 16px;
+      gap: 20px;
+      flex-shrink: 0;
+      z-index: 1000;
+    }
+
+    .status-brand {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-weight: 700;
+      font-size: 15px;
+      color: var(--text);
+      white-space: nowrap;
+    }
+
+    .status-brand .dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--brand-blue);
+      animation: pulse 2s infinite;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.4; }
+    }
+
+    .status-pills {
+      display: flex;
+      gap: 12px;
+      flex: 1;
+      overflow: hidden;
+    }
+
+    .pill {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 3px 10px;
+      border-radius: 20px;
+      font-size: 12px;
+      font-weight: 500;
+      white-space: nowrap;
+      background: rgba(255,255,255,0.05);
+      border: 1px solid var(--border);
+    }
+
+    .pill .count { font-weight: 700; }
+    .pill.red .count { color: var(--red); }
+    .pill.amber .count { color: var(--amber); }
+    .pill.green .count { color: var(--green); }
+    .pill.blue .count { color: var(--brand-blue); }
+
+    #conn-status {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 12px;
+      color: var(--text-muted);
+      white-space: nowrap;
+      margin-left: auto;
+    }
+
+    #conn-status .indicator {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--green);
+    }
+
+    #conn-status.offline .indicator { background: var(--red); }
+    #conn-status.loading .indicator { background: var(--amber); animation: pulse 1s infinite; }
+
+    #last-updated {
+      font-size: 11px;
+      color: var(--text-muted);
+      white-space: nowrap;
+    }
+
+    /* ── Main Layout ── */
+    #main {
+      display: flex;
+      flex: 1;
+      overflow: hidden;
+    }
+
+    /* ── Sidebar ── */
+    #sidebar {
+      width: 300px;
+      min-width: 260px;
+      background: var(--bg-panel);
+      border-right: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      z-index: 100;
+      transition: width 0.2s ease;
+    }
+
+    #sidebar.collapsed { width: 0; min-width: 0; overflow: hidden; }
+
+    .sidebar-header {
+      padding: 14px 16px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .sidebar-header h2 {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    /* ── Layer Toggles ── */
+    .layer-toggles {
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .layer-toggle {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      cursor: pointer;
+      padding: 8px 12px;
+      border-radius: 8px;
+      background: rgba(255,255,255,0.02);
+      border: 1px solid transparent;
+      transition: all 0.15s;
+    }
+
+    .layer-toggle:hover { background: rgba(255,255,255,0.05); }
+    .layer-toggle.active { border-color: var(--brand-blue); background: rgba(37,99,235,0.08); }
+
+    .layer-label {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 13px;
+      font-weight: 500;
+    }
+
+    .layer-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+    }
+
+    .toggle-switch {
+      width: 34px;
+      height: 18px;
+      border-radius: 9px;
+      background: var(--border);
+      position: relative;
+      transition: background 0.2s;
+    }
+
+    .toggle-switch::after {
+      content: '';
+      position: absolute;
+      width: 14px;
+      height: 14px;
+      border-radius: 50%;
+      background: white;
+      top: 2px;
+      left: 2px;
+      transition: left 0.2s;
+    }
+
+    .layer-toggle.active .toggle-switch { background: var(--brand-blue); }
+    .layer-toggle.active .toggle-switch::after { left: 18px; }
+
+    /* ── Search ── */
+    .search-box {
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .search-box input {
+      width: 100%;
+      background: rgba(255,255,255,0.05);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 8px 12px;
+      color: var(--text);
+      font-size: 13px;
+      font-family: 'Inter', sans-serif;
+      outline: none;
+    }
+
+    .search-box input:focus { border-color: var(--brand-blue); }
+    .search-box input::placeholder { color: var(--text-muted); }
+
+    /* ── Incident List ── */
+    #incident-list {
+      flex: 1;
+      overflow-y: auto;
+      padding: 8px;
+    }
+
+    #incident-list::-webkit-scrollbar { width: 4px; }
+    #incident-list::-webkit-scrollbar-track { background: transparent; }
+    #incident-list::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+    .incident-card {
+      padding: 10px 12px;
+      border-radius: 8px;
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      margin-bottom: 6px;
+      cursor: pointer;
+      transition: border-color 0.15s, background 0.15s;
+    }
+
+    .incident-card:hover {
+      border-color: var(--brand-blue);
+      background: rgba(37,99,235,0.06);
+    }
+
+    .incident-card-header {
+      display: flex;
+      align-items: flex-start;
+      gap: 8px;
+      margin-bottom: 4px;
+    }
+
+    .severity-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      flex-shrink: 0;
+      margin-top: 4px;
+    }
+
+    .incident-title {
+      font-size: 12px;
+      font-weight: 600;
+      line-height: 1.4;
+      color: var(--text);
+    }
+
+    .incident-meta {
+      font-size: 11px;
+      color: var(--text-muted);
+      margin-left: 16px;
+    }
+
+    .badge {
+      display: inline-block;
+      padding: 1px 6px;
+      border-radius: 4px;
+      font-size: 10px;
+      font-weight: 600;
+      text-transform: uppercase;
+    }
+
+    .badge-incident { background: rgba(239,68,68,0.2); color: var(--red); }
+    .badge-roadworks { background: rgba(245,158,11,0.2); color: var(--amber); }
+    .badge-flow { background: rgba(34,197,94,0.2); color: var(--green); }
+    .badge-tro { background: rgba(139,92,246,0.2); color: var(--purple); }
+    .badge-conditions { background: rgba(148,163,184,0.2); color: var(--text-muted); }
+
+    .empty-state {
+      text-align: center;
+      padding: 40px 20px;
+      color: var(--text-muted);
+      font-size: 13px;
+    }
+
+    /* ── Map ── */
+    #map-wrap {
+      flex: 1;
+      position: relative;
+      overflow: hidden;
+    }
+
+    #map {
+      width: 100%;
+      height: 100%;
+    }
+
+    /* ── Map Controls ── */
+    #map-controls {
+      position: absolute;
+      top: 12px;
+      right: 12px;
+      z-index: 1000;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .map-btn {
+      width: 36px;
+      height: 36px;
+      border-radius: 8px;
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      color: var(--text);
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 16px;
+      transition: background 0.15s, border-color 0.15s;
+    }
+
+    .map-btn:hover { background: rgba(37,99,235,0.2); border-color: var(--brand-blue); }
+    .map-btn.active { background: var(--brand-blue); border-color: var(--brand-blue); }
+
+    /* ── Sidebar Toggle ── */
+    #sidebar-toggle {
+      position: absolute;
+      top: 12px;
+      left: 12px;
+      z-index: 1001;
+    }
+
+    /* ── Legend ── */
+    #legend {
+      position: absolute;
+      bottom: 30px;
+      right: 12px;
+      z-index: 1000;
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 12px 14px;
+      font-size: 12px;
+    }
+
+    .legend-title {
+      font-weight: 600;
+      color: var(--text-muted);
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin-bottom: 8px;
+    }
+
+    .legend-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 5px;
+      color: var(--text-muted);
+    }
+
+    .legend-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+
+    /* ── Loading overlay ── */
+    #loading {
+      position: absolute;
+      inset: 0;
+      background: rgba(15,17,23,0.8);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 2000;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    #loading.hidden { display: none; }
+
+    .spinner {
+      width: 40px;
+      height: 40px;
+      border: 3px solid var(--border);
+      border-top-color: var(--brand-blue);
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    .loading-text {
+      color: var(--text-muted);
+      font-size: 14px;
+    }
+
+    /* ── Leaflet popup override ── */
+    .leaflet-popup-content-wrapper {
+      background: var(--bg-card) !important;
+      border: 1px solid var(--border) !important;
+      border-radius: 10px !important;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.5) !important;
+      color: var(--text) !important;
+    }
+
+    .leaflet-popup-tip { background: var(--bg-card) !important; }
+
+    .popup-title {
+      font-size: 13px;
+      font-weight: 600;
+      margin-bottom: 6px;
+      line-height: 1.4;
+    }
+
+    .popup-desc {
+      font-size: 12px;
+      color: var(--text-muted);
+      margin-bottom: 8px;
+      line-height: 1.5;
+    }
+
+    .popup-meta {
+      font-size: 11px;
+      color: var(--text-muted);
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+    }
+
+    .popup-source { color: var(--brand-blue); }
+
+    /* ── Light mode ── */
+    body.light-mode {
+      --bg-dark: #f8fafc;
+      --bg-card: #ffffff;
+      --bg-panel: #f1f5f9;
+      --border: #e2e8f0;
+      --text: #1e293b;
+      --text-muted: #64748b;
+    }
+
+    /* ── Responsive ── */
+    @media (max-width: 640px) {
+      #sidebar { position: absolute; top: var(--status-height); left: 0; bottom: 0; z-index: 500; }
+      #sidebar:not(.collapsed) { width: 280px; }
+      #legend { display: none; }
+      .status-pills .pill:nth-child(n+4) { display: none; }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Status Bar -->
+  <div id="statusbar">
+    <div class="status-brand">
+      <span class="dot"></span>
+      <span>AyrTraffic</span>
+    </div>
+    <div class="status-pills">
+      <div class="pill red">
+        <span class="count" id="count-incidents">–</span>
+        <span>Incidents</span>
+      </div>
+      <div class="pill amber">
+        <span class="count" id="count-roadworks">–</span>
+        <span>Roadworks</span>
+      </div>
+      <div class="pill blue">
+        <span class="count" id="count-sources">–</span>
+        <span>Sources</span>
+      </div>
+      <div class="pill green" id="congestion-pill">
+        <span class="count" id="count-congestion">–</span>
+        <span>Congestion</span>
+      </div>
+    </div>
+    <div id="last-updated">–</div>
+    <div id="conn-status" class="loading">
+      <span class="indicator"></span>
+      <span id="conn-text">Connecting…</span>
+    </div>
+  </div>
+
+  <!-- Main -->
+  <div id="main">
+
+    <!-- Sidebar -->
+    <div id="sidebar">
+      <div class="sidebar-header">
+        <h2>Layers &amp; Events</h2>
+      </div>
+
+      <!-- Layer Toggles -->
+      <div class="layer-toggles">
+        <div class="layer-toggle active" data-layer="incidents" onclick="toggleLayer(this)">
+          <div class="layer-label">
+            <span class="layer-dot" style="background:var(--red)"></span>
+            Incidents
+          </div>
+          <div class="toggle-switch"></div>
+        </div>
+        <div class="layer-toggle active" data-layer="roadworks" onclick="toggleLayer(this)">
+          <div class="layer-label">
+            <span class="layer-dot" style="background:var(--amber)"></span>
+            Roadworks
+          </div>
+          <div class="toggle-switch"></div>
+        </div>
+        <div class="layer-toggle active" data-layer="flow" onclick="toggleLayer(this)">
+          <div class="layer-label">
+            <span class="layer-dot" style="background:var(--green)"></span>
+            Traffic Flow
+          </div>
+          <div class="toggle-switch"></div>
+        </div>
+        <div class="layer-toggle" data-layer="heatmap" onclick="toggleLayer(this)">
+          <div class="layer-label">
+            <span class="layer-dot" style="background:var(--purple)"></span>
+            Heat Map
+          </div>
+          <div class="toggle-switch"></div>
+        </div>
+      </div>
+
+      <!-- Search -->
+      <div class="search-box">
+        <input type="text" id="search-input" placeholder="Search road or location…" oninput="filterList(this.value)">
+      </div>
+
+      <!-- List -->
+      <div id="incident-list">
+        <div class="empty-state">Loading traffic data…</div>
+      </div>
+    </div>
+
+    <!-- Map -->
+    <div id="map-wrap">
+      <div id="loading">
+        <div class="spinner"></div>
+        <div class="loading-text">Loading Ayrshire traffic data…</div>
+      </div>
+
+      <div id="map"></div>
+
+      <!-- Map Controls -->
+      <div id="map-controls">
+        <button class="map-btn" onclick="resetView()" title="Reset view">⌂</button>
+        <button class="map-btn" id="theme-btn" onclick="toggleTheme()" title="Toggle theme">☀</button>
+        <button class="map-btn" id="refresh-btn" onclick="forceRefresh()" title="Refresh data">↻</button>
+      </div>
+
+      <!-- Sidebar toggle (mobile/hide) -->
+      <div id="sidebar-toggle">
+        <button class="map-btn" onclick="toggleSidebar()" title="Toggle sidebar">☰</button>
+      </div>
+
+      <!-- Legend -->
+      <div id="legend">
+        <div class="legend-title">Legend</div>
+        <div class="legend-item"><span class="legend-dot" style="background:var(--red)"></span> Incident (severe)</div>
+        <div class="legend-item"><span class="legend-dot" style="background:var(--amber)"></span> Incident / Roadworks</div>
+        <div class="legend-item"><span class="legend-dot" style="background:var(--green)"></span> Free flow</div>
+        <div class="legend-item"><span class="legend-dot" style="background:var(--purple)"></span> TRO / Regulation</div>
+      </div>
+    </div>
+  </div>
+
+<script>
+// ── Config ──────────────────────────────────────────────────────────────────
+const AYR_CENTER = [55.4583, -4.6292];
+const DEFAULT_ZOOM = 11;
+const API_BASE = '';
+const REFRESH_INTERVAL = 180000; // 3 min
+
+// ── Map Init ─────────────────────────────────────────────────────────────────
+const map = L.map('map', {
+  center: AYR_CENTER,
+  zoom: DEFAULT_ZOOM,
+  zoomControl: false,
+});
+
+L.control.zoom({ position: 'bottomright' }).addTo(map);
+
+// Tile layers
+const darkTile = L.tileLayer(
+  'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
+  { attribution: '© OpenStreetMap © CartoDB', maxZoom: 19 }
+);
+const lightTile = L.tileLayer(
+  'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png',
+  { attribution: '© OpenStreetMap © CartoDB', maxZoom: 19 }
+);
+
+darkTile.addTo(map);
+let isDark = true;
+
+// Layer groups
+const layers = {
+  incidents: L.layerGroup().addTo(map),
+  roadworks: L.layerGroup().addTo(map),
+  flow:      L.layerGroup().addTo(map),
+  tros:      L.layerGroup().addTo(map),
+};
+
+let heatLayer = null;
+let allItems = [];
+let activeLayers = new Set(['incidents', 'roadworks', 'flow']);
+let heatmapEnabled = false;
+
+// ── Marker Icons ─────────────────────────────────────────────────────────────
+function makeIcon(color, symbol) {
+  return L.divIcon({
+    className: '',
+    html: `<div style="
+      width:28px;height:28px;border-radius:50%;
+      background:${color};
+      border:2px solid rgba(255,255,255,0.3);
+      display:flex;align-items:center;justify-content:center;
+      font-size:13px;
+      box-shadow:0 2px 8px rgba(0,0,0,0.5);
+    ">${symbol}</div>`,
+    iconSize: [28, 28],
+    iconAnchor: [14, 14],
+    popupAnchor: [0, -18],
+  });
+}
+
+const ICONS = {
+  red:    makeIcon('#ef4444', '⚠'),
+  amber:  makeIcon('#f59e0b', '🚧'),
+  green:  makeIcon('#22c55e', '✓'),
+  purple: makeIcon('#8b5cf6', '🚫'),
+  flow_red:   makeIcon('#ef4444', '🔴'),
+  flow_amber: makeIcon('#f59e0b', '🟡'),
+  flow_green: makeIcon('#22c55e', '🟢'),
+};
+
+function getIcon(item) {
+  if (item.type === 'flow') {
+    return ICONS['flow_' + item.severity] || ICONS.flow_green;
+  }
+  if (item.severity === 'red')    return ICONS.red;
+  if (item.severity === 'amber')  return ICONS.amber;
+  if (item.severity === 'purple') return ICONS.purple;
+  return ICONS.green;
+}
+
+// ── Popup Builder ─────────────────────────────────────────────────────────────
+function buildPopup(item) {
+  const badgeClass = {
+    incidents: 'badge-incident',
+    roadworks: 'badge-roadworks',
+    conditions: 'badge-roadworks',
+    flow: 'badge-flow',
+    tro: 'badge-tro',
+  }[item.type] || 'badge-roadworks';
+
+  const badgeLabel = {
+    incidents: 'Incident',
+    roadworks: 'Roadworks',
+    conditions: 'Road Condition',
+    flow: 'Traffic Flow',
+    tro: 'TRO',
+  }[item.type] || item.type;
+
+  let extra = '';
+  if (item.flow_data) {
+    const fd = item.flow_data;
+    extra = `
+      <div style="margin-top:8px;padding:8px;background:rgba(255,255,255,0.04);border-radius:6px;font-size:11px;">
+        <div>🚗 Speed: <strong>${fd.current_speed} km/h</strong> (free flow: ${fd.free_flow_speed})</div>
+        <div>📊 Congestion: <strong>${Math.round(fd.congestion_level * 100)}%</strong></div>
+        <div>🛣️ Route: ${fd.route}</div>
+      </div>`;
+  }
+
+  const pubDate = item.pub_date ? `<div>🕐 ${new Date(item.pub_date).toLocaleDateString('en-GB', {day:'numeric',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'})}</div>` : '';
+  const link = item.url ? `<a href="${item.url}" target="_blank" style="color:var(--brand-blue);font-size:11px;">View source →</a>` : '';
+
+  return `
+    <div style="min-width:200px;max-width:280px;font-family:Inter,sans-serif;">
+      <div class="popup-title">
+        <span class="badge ${badgeClass}">${badgeLabel}</span>
+        <br><br>${item.title}
+      </div>
+      <div class="popup-desc">${item.description || '–'}</div>
+      ${extra}
+      <div class="popup-meta">
+        ${pubDate}
+        <div class="popup-source">📡 ${item.source}</div>
+        ${link}
+      </div>
+    </div>`;
+}
+
+// ── Render Markers ────────────────────────────────────────────────────────────
+function renderMarkers(data) {
+  // Clear all layers
+  Object.values(layers).forEach(l => l.clearLayers());
+
+  // Heat map data
+  const heatPoints = [];
+
+  data.all.forEach(item => {
+    if (!item.lat || !item.lon) return;
+
+    const layerKey = {
+      incidents: 'incidents',
+      roadworks: 'roadworks',
+      conditions: 'roadworks',
+      flow: 'flow',
+      tro: 'tros',
+    }[item.type] || 'roadworks';
+
+    const marker = L.marker([item.lat, item.lon], { icon: getIcon(item) })
+      .bindPopup(buildPopup(item), { maxWidth: 300 });
+
+    // Click: scroll to card in sidebar
+    marker.on('click', () => scrollToCard(item.id));
+
+    layers[layerKey].addLayer(marker);
+
+    // Heat data — weighted by congestion for flow, 1 for others
+    const weight = item.flow_data ? item.flow_data.congestion_level : 0.8;
+    heatPoints.push([item.lat, item.lon, weight]);
+  });
+
+  // Update heat layer
+  if (heatLayer) {
+    map.removeLayer(heatLayer);
+  }
+  heatLayer = L.heatLayer(heatPoints, {
+    radius: 25,
+    blur: 20,
+    maxZoom: 14,
+    gradient: { 0.2: '#22c55e', 0.5: '#f59e0b', 0.8: '#ef4444' }
+  });
+  if (heatmapEnabled) {
+    heatLayer.addTo(map);
+  }
+
+  // Update sidebar list
+  renderList(data.all);
+}
+
+// ── Sidebar List ─────────────────────────────────────────────────────────────
+let allItemsFlat = [];
+let searchQuery = '';
+
+function renderList(items) {
+  allItemsFlat = items;
+  filterList(searchQuery);
+}
+
+function filterList(q) {
+  searchQuery = q.toLowerCase();
+  const container = document.getElementById('incident-list');
+
+  const filtered = allItemsFlat.filter(item => {
+    if (!activeLayers.has(item.type === 'flow' ? 'flow' :
+                          item.type === 'incidents' ? 'incidents' : 'roadworks')) return false;
+    if (!searchQuery) return true;
+    return (item.title + item.description + item.source).toLowerCase().includes(searchQuery);
+  });
+
+  if (!filtered.length) {
+    container.innerHTML = `<div class="empty-state">${searchQuery ? 'No results for "' + searchQuery + '"' : 'No active events in Ayrshire'}</div>`;
+    return;
+  }
+
+  const badgeClass = { incidents: 'badge-incident', roadworks: 'badge-roadworks', conditions: 'badge-roadworks', flow: 'badge-flow', tro: 'badge-tro' };
+  const badgeLabel = { incidents: 'Incident', roadworks: 'Roadworks', conditions: 'Condition', flow: 'Flow', tro: 'TRO' };
+  const dotColor = { red: 'var(--red)', amber: 'var(--amber)', green: 'var(--green)', purple: 'var(--purple)' };
+
+  container.innerHTML = filtered.slice(0, 100).map(item => `
+    <div class="incident-card" id="card-${item.id.replace(/[^a-z0-9]/gi,'-')}" onclick="flyToItem('${item.id.replace(/'/g,"\\'")}')">
+      <div class="incident-card-header">
+        <span class="severity-dot" style="background:${dotColor[item.severity] || 'var(--green)'}"></span>
+        <div class="incident-title">${item.title}</div>
+      </div>
+      <div class="incident-meta">
+        <span class="badge ${badgeClass[item.type] || 'badge-roadworks'}">${badgeLabel[item.type] || item.type}</span>
+        <span style="margin-left:6px;font-size:11px;">${item.source}</span>
+      </div>
+    </div>
+  `).join('');
+}
+
+function flyToItem(id) {
+  const item = allItemsFlat.find(i => i.id === id);
+  if (!item) return;
+  map.flyTo([item.lat, item.lon], 14, { duration: 0.8 });
+  // Open popup after fly
+  setTimeout(() => {
+    const layerKey = { incidents: 'incidents', roadworks: 'roadworks', conditions: 'roadworks', flow: 'flow', tro: 'tros' }[item.type] || 'roadworks';
+    layers[layerKey].eachLayer(m => {
+      if (m.getLatLng().lat === item.lat && m.getLatLng().lng === item.lon) {
+        m.openPopup();
+      }
+    });
+  }, 900);
+}
+
+function scrollToCard(id) {
+  const card = document.getElementById('card-' + id.replace(/[^a-z0-9]/gi,'-'));
+  if (card) card.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
+// ── Layer Toggles ─────────────────────────────────────────────────────────────
+function toggleLayer(el) {
+  const layer = el.dataset.layer;
+
+  if (layer === 'heatmap') {
+    heatmapEnabled = !heatmapEnabled;
+    el.classList.toggle('active', heatmapEnabled);
+    if (heatmapEnabled && heatLayer) heatLayer.addTo(map);
+    else if (heatLayer) map.removeLayer(heatLayer);
+    return;
+  }
+
+  if (activeLayers.has(layer)) {
+    activeLayers.delete(layer);
+    el.classList.remove('active');
+    if (layers[layer]) map.removeLayer(layers[layer]);
+  } else {
+    activeLayers.add(layer);
+    el.classList.add('active');
+    if (layers[layer]) layers[layer].addTo(map);
+  }
+  filterList(searchQuery);
+}
+
+// ── Status Updates ────────────────────────────────────────────────────────────
+function updateStatus(data) {
+  const meta = data.meta || {};
+  document.getElementById('count-incidents').textContent = meta.total_incidents || 0;
+  document.getElementById('count-roadworks').textContent = meta.total_roadworks || 0;
+  document.getElementById('count-sources').textContent = meta.sources_active || 0;
+
+  // Congestion from flow
+  const flow = data.flow || [];
+  if (flow.length) {
+    const avg = flow.reduce((s, f) => s + (f.flow_data?.congestion_level || 0), 0) / flow.length;
+    const pct = Math.round(avg * 100);
+    document.getElementById('count-congestion').textContent = pct + '%';
+    const pill = document.getElementById('congestion-pill');
+    pill.className = 'pill ' + (pct > 50 ? 'red' : pct > 30 ? 'amber' : 'green');
+  }
+
+  if (meta.updated_at) {
+    const d = new Date(meta.updated_at);
+    document.getElementById('last-updated').textContent = 
+      'Updated ' + d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+  }
+}
+
+function setConnStatus(state, text) {
+  const el = document.getElementById('conn-status');
+  el.className = state;
+  document.getElementById('conn-text').textContent = text;
+}
+
+// ── Data Fetch ────────────────────────────────────────────────────────────────
+async function fetchTraffic() {
+  setConnStatus('loading', 'Refreshing…');
+  try {
+    const resp = await fetch(API_BASE + '/api/traffic');
+    if (!resp.ok) throw new Error('HTTP ' + resp.status);
+    const data = await resp.json();
+    allItems = data.all || [];
+    renderMarkers(data);
+    updateStatus(data);
+    setConnStatus('', 'Live');
+    document.getElementById('loading').classList.add('hidden');
+  } catch (err) {
+    console.error('Fetch failed:', err);
+    setConnStatus('offline', 'Offline');
+  }
+}
+
+async function forceRefresh() {
+  const btn = document.getElementById('refresh-btn');
+  btn.style.transform = 'rotate(360deg)';
+  btn.style.transition = 'transform 0.5s';
+  setTimeout(() => { btn.style.transform = ''; btn.style.transition = ''; }, 500);
+  await fetch(API_BASE + '/api/refresh', { method: 'POST' }).catch(() => {});
+  await fetchTraffic();
+}
+
+// ── Theme ─────────────────────────────────────────────────────────────────────
+function toggleTheme() {
+  isDark = !isDark;
+  document.body.classList.toggle('light-mode', !isDark);
+  document.getElementById('theme-btn').textContent = isDark ? '☀' : '🌙';
+  if (isDark) {
+    map.removeLayer(lightTile);
+    darkTile.addTo(map);
+  } else {
+    map.removeLayer(darkTile);
+    lightTile.addTo(map);
+  }
+}
+
+function resetView() {
+  map.flyTo(AYR_CENTER, DEFAULT_ZOOM, { duration: 0.8 });
+}
+
+function toggleSidebar() {
+  document.getElementById('sidebar').classList.toggle('collapsed');
+}
+
+// ── Init ─────────────────────────────────────────────────────────────────────
+fetchTraffic();
+setInterval(fetchTraffic, REFRESH_INTERVAL);
+
+// Draw Ayrshire boundary hint
+const ayrshireBounds = [
+  [55.25, -5.00], [55.75, -5.00],
+  [55.75, -4.10], [55.25, -4.10],
+];
+L.polygon(ayrshireBounds, {
+  color: '#2563eb',
+  weight: 1,
+  opacity: 0.2,
+  fillOpacity: 0.02,
+  dashArray: '4 8',
+}).addTo(map);
+</script>
+</body>
+</html>
