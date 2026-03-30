@@ -456,8 +456,24 @@ async def fetch_ara_tros() -> list:
 TOMTOM_API_KEY = "KkNkcnBcWERbYBeSXUPV9DN1VWZOWbal"
 
 
+TOMTOM_CACHE_TTL = 600  # 10 minutes — keeps us under 2500 daily free tier (17 probes × 144 = 2448)
+
+
 async def generate_flow_data() -> list:
-    """Fetch real-time traffic flow from TomTom for major Ayrshire roads."""
+    """Fetch real-time traffic flow from TomTom for major Ayrshire roads.
+    
+    Rate limited: 10-min cache per probe to stay under 2500 daily requests.
+    """
+    # Check TomTom cache first
+    cached = cache_get_stale("tomtom_flow")
+    if cached:
+        # Check if cache is still within TTL
+        row = DB.execute("SELECT timestamp FROM cache WHERE key = 'tomtom_flow'").fetchone()
+        if row:
+            age = time.time() - row[0]
+            if age < TOMTOM_CACHE_TTL:
+                log.debug(f"TomTom: serving cached data ({int(age)}s old, TTL={TOMTOM_CACHE_TTL}s)")
+                return cached.get("items", [])
 
     # Probe points on key Ayrshire roads (lat, lon, road_name, road_ref)
     PROBE_POINTS = [
@@ -546,6 +562,8 @@ async def generate_flow_data() -> list:
                 continue
 
     log.info(f"TomTom: got {len(results)} flow segments from {len(PROBE_POINTS)} probes")
+    # Cache results with separate TTL
+    cache_set("tomtom_flow", {"items": results})
     return results
 
 
