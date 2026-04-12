@@ -5,15 +5,10 @@ Port: 3870
 """
 
 import asyncio
-import csv
-import ftplib
-import io
 import json
 import logging
 import math
-import os
 import re
-import shutil
 import sqlite3
 import time
 import xml.etree.ElementTree as ET
@@ -39,9 +34,8 @@ AYRSHIRE_BBOX = {
     "west": -5.00,
     "east": -4.10,
 }
-NURO_HUB = "http://10.200.0.8:3960"
+NURO_HUB = "http://192.168.195.33:3960"
 SERVICE_ID = "ayrtraffic"
-SIPHON_URL = "http://142.202.191.208:3882"
 # ─── DATEX II Config (Traffic Scotland) ──────────────────────────────────────
 
 DATEX2_CLIENT_ID = "14d2c05d-696d-45be-8ddc-2b20105de3c7"
@@ -50,16 +44,6 @@ DATEX2_BASE_URL = "https://datex2.trafficscotland.org/rest/2.3/publications"
 DATEX2_AUTH = (DATEX2_CLIENT_ID, DATEX2_CLIENT_KEY)
 DATEX2_NS = {"d2": "http://datex2.eu/schema/2/2_0"}
 DATEX2_CACHE_TTL = 300  # 5 minutes
-
-# ─── FTP Camera Config (Traffic Scotland CCTV) ──────────────────────────────
-
-FTP_HOST = "ftp.traffic-scotland.co.uk"
-FTP_USER = "p93dG2J3M9YI"
-FTP_PASS = "ihN45rDz8oz6"
-FTP_CAMERA_DIR = Path(__file__).parent / "data" / "cameras"
-FTP_CAMERA_DIR.mkdir(parents=True, exist_ok=True)
-FTP_FETCH_INTERVAL = 1200  # 20 minutes — cache locally, don't hammer FTP
-FTP_CSV_CACHE_TTL = 86400  # Re-fetch CSV once per day
 
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [AyrTraffic] %(message)s")
@@ -169,264 +153,10 @@ def severity_from_text(text: str) -> str:
     return "green"
 
 
-
-
-# ─── Siphon-First Data Fetchers ──────────────────────────────────────────────
-# Pattern: Try Siphon (fast cached REST) first, fall back to legacy direct API calls
-
-def _siphon_severity_to_frontend(severity: str) -> str:
-    """Map Siphon severity strings to frontend color codes."""
-    mapping = {
-        "highest": "red",
-        "high": "red",
-        "medium": "amber",
-        "low": "green",
-        "lowest": "green",
-        "unknown": "amber",
-    }
-    return mapping.get((severity or "").lower(), "amber")
-
+# ─── Data Fetchers ────────────────────────────────────────────────────────────
 
 async def fetch_tsis_incidents() -> list:
-    """Fetch incidents: Siphon PRIMARY, legacy TSIS fallback."""
-    data = await siphon_get("/api/traffic/datex2/incidents")
-    if data and data.get("incidents"):
-        results = []
-        for inc in data["incidents"]:
-            lat = inc.get("lat")
-            lon = inc.get("lon")
-            if not lat or not lon:
-                continue
-            if not in_ayrshire(float(lat), float(lon)):
-                continue
-            title = inc.get("title") or "Incident"
-            if inc.get("road"):
-                title = f"{inc['road']}: {title}"
-            if inc.get("location_name"):
-                title += f" ({inc['location_name']})"
-            desc_parts = []
-            if inc.get("description"):
-                desc_parts.append(inc["description"])
-            if inc.get("validity_start"):
-                desc_parts.append(f"Since: {inc['validity_start']}")
-            if inc.get("validity_end"):
-                desc_parts.append(f"Until: {inc['validity_end']}")
-            results.append({
-                "id": f"siphon-inc-{inc.get('id', '')}",
-                "type": "incidents",
-                "title": title[:200],
-                "description": " | ".join(desc_parts)[:500],
-                "lat": float(lat),
-                "lon": float(lon),
-                "severity": _siphon_severity_to_frontend(inc.get("severity", "")),
-                "source": "DATEX II (Siphon)",
-                "url": "https://www.traffic.gov.scot/",
-                "pub_date": inc.get("validity_start", ""),
-                "active": True,
-                "datex_type": inc.get("datex_type", ""),
-            })
-        log.info(f"Siphon incidents: {len(results)} Ayrshire items (from {data.get('count', '?')} total)")
-        return results
-    # Fallback to legacy
-    log.info("Siphon incidents unavailable, falling back to legacy TSIS")
-    return await _legacy_fetch_tsis_incidents()
-
-
-async def fetch_tsis_roadworks() -> list:
-    """Fetch roadworks: Siphon PRIMARY, legacy TSIS fallback."""
-    data = await siphon_get("/api/traffic/datex2/roadworks")
-    if data and data.get("roadworks"):
-        results = []
-        for rw in data["roadworks"]:
-            lat = rw.get("lat")
-            lon = rw.get("lon")
-            if not lat or not lon:
-                continue
-            if not in_ayrshire(float(lat), float(lon)):
-                continue
-            title = "Roadworks"
-            if rw.get("road"):
-                title = f"{rw['road']} Roadworks"
-            if rw.get("location_name"):
-                title += f" ({rw['location_name']})"
-            if rw.get("planned"):
-                title = f"Planned: {title}"
-            desc_parts = []
-            if rw.get("description"):
-                desc_parts.append(rw["description"])
-            if rw.get("validity_start"):
-                desc_parts.append(f"From: {rw['validity_start']}")
-            if rw.get("validity_end"):
-                desc_parts.append(f"Until: {rw['validity_end']}")
-            results.append({
-                "id": f"siphon-rw-{rw.get('id', '')}",
-                "type": "roadworks",
-                "title": title[:200],
-                "description": " | ".join(desc_parts)[:500],
-                "lat": float(lat),
-                "lon": float(lon),
-                "severity": _siphon_severity_to_frontend(rw.get("severity", "medium")),
-                "source": "DATEX II (Siphon)",
-                "url": "https://www.traffic.gov.scot/",
-                "pub_date": rw.get("validity_start", ""),
-                "active": not rw.get("planned", False),
-                "planned": rw.get("planned", False),
-            })
-        log.info(f"Siphon roadworks: {len(results)} Ayrshire items (from {data.get('count', '?')} total)")
-        return results
-    # Fallback to legacy
-    log.info("Siphon roadworks unavailable, falling back to legacy TSIS")
-    return await _legacy_fetch_tsis_roadworks()
-
-
-async def fetch_datex2_events() -> list:
-    """Fetch DATEX2 incidents: Siphon PRIMARY, legacy DATEX2 XML fallback."""
-    data = await siphon_get("/api/traffic/datex2/incidents")
-    if data and data.get("incidents"):
-        results = []
-        for inc in data["incidents"]:
-            lat = inc.get("lat")
-            lon = inc.get("lon")
-            if not lat or not lon:
-                continue
-            # Wider Ayrshire bbox for DATEX2
-            if not (55.15 <= float(lat) <= 55.85 and -5.1 <= float(lon) <= -4.0):
-                continue
-            title = inc.get("title") or inc.get("datex_type") or "Incident"
-            if inc.get("road"):
-                title = f"{inc['road']}: {title}"
-            if inc.get("location_name"):
-                title += f" ({inc['location_name']})"
-            desc_parts = []
-            if inc.get("description"):
-                desc_parts.append(inc["description"])
-            if inc.get("validity_start"):
-                desc_parts.append(f"Since: {inc['validity_start']}")
-            if inc.get("validity_end"):
-                desc_parts.append(f"Until: {inc['validity_end']}")
-            results.append({
-                "id": f"datex-event-{inc.get('id', '')}",
-                "type": "incidents",
-                "title": title[:200],
-                "description": " | ".join(desc_parts)[:500],
-                "lat": float(lat),
-                "lon": float(lon),
-                "severity": _siphon_severity_to_frontend(inc.get("severity", "")),
-                "source": "DATEX II",
-                "url": "https://www.traffic.gov.scot/",
-                "pub_date": inc.get("validity_start", ""),
-                "active": True,
-                "datex_type": inc.get("datex_type", ""),
-                "datex_id": inc.get("id", ""),
-            })
-        log.info(f"Siphon DATEX2 events: {len(results)} Ayrshire items")
-        return results
-    log.info("Siphon DATEX2 events unavailable, falling back to legacy XML parsing")
-    return await _legacy_fetch_datex2_events()
-
-
-async def fetch_datex2_roadworks() -> list:
-    """Fetch DATEX2 roadworks: Siphon PRIMARY, legacy DATEX2 XML fallback."""
-    data = await siphon_get("/api/traffic/datex2/roadworks")
-    if data and data.get("roadworks"):
-        results = []
-        for rw in data["roadworks"]:
-            lat = rw.get("lat")
-            lon = rw.get("lon")
-            if not lat or not lon:
-                continue
-            if not (55.15 <= float(lat) <= 55.85 and -5.1 <= float(lon) <= -4.0):
-                continue
-            is_planned = rw.get("planned", False)
-            prefix = "Planned: " if is_planned else ""
-            title = f"{prefix}Roadworks"
-            if rw.get("road"):
-                title = f"{prefix}{rw['road']} Roadworks"
-            if rw.get("location_name"):
-                title += f" ({rw['location_name']})"
-            desc_parts = []
-            if rw.get("description"):
-                desc_parts.append(rw["description"])
-            if rw.get("validity_start"):
-                desc_parts.append(f"From: {rw['validity_start']}")
-            if rw.get("validity_end"):
-                desc_parts.append(f"Until: {rw['validity_end']}")
-            results.append({
-                "id": f"datex-rw-{rw.get('id', '')}",
-                "type": "roadworks",
-                "title": title[:200],
-                "description": " | ".join(desc_parts)[:500],
-                "lat": float(lat),
-                "lon": float(lon),
-                "severity": _siphon_severity_to_frontend(rw.get("severity", "medium")),
-                "source": "DATEX II",
-                "url": "https://www.traffic.gov.scot/",
-                "pub_date": rw.get("validity_start", ""),
-                "active": not is_planned,
-                "datex_type": rw.get("datex_type", ""),
-                "datex_id": rw.get("id", ""),
-                "planned": is_planned,
-            })
-        log.info(f"Siphon DATEX2 roadworks: {len(results)} Ayrshire items")
-        return results
-    log.info("Siphon DATEX2 roadworks unavailable, falling back to legacy XML parsing")
-    return await _legacy_fetch_datex2_roadworks()
-
-
-async def fetch_traffic_cameras() -> list:
-    """Fetch cameras: Siphon PRIMARY, legacy FTP/web fallback."""
-    data = await siphon_get("/api/traffic/cameras")
-    if data and data.get("cameras"):
-        results = []
-        now_iso = datetime.now(timezone.utc).isoformat()
-        for cam in data["cameras"]:
-            lat = cam.get("lat")
-            lon = cam.get("lon")
-            if not lat or not lon:
-                continue
-            # Wider Ayrshire filter for cameras
-            if not (55.1 <= float(lat) <= 55.9 and -5.1 <= float(lon) <= -4.1):
-                continue
-            cam_id = cam.get("id", "")
-            image_url = cam.get("image_url", "")
-            # Check if we have a local FTP copy for this camera
-            sensor_id = cam_id.replace(".", "_").replace(".jpg", "")
-            local_sensor = _ftp_sensors.get(sensor_id)
-            local_health = _ftp_sensor_health.get(sensor_id, {})
-            local_img = FTP_CAMERA_DIR / f"{cam_id}.jpg" if cam_id else None
-            has_local = local_img and local_img.exists() and local_img.stat().st_size > 500 if local_img else False
-            # Prefer local FTP image if available
-            if has_local:
-                display_url = f"/api/cameras/image/{cam_id}.jpg"
-            elif image_url:
-                display_url = image_url
-            else:
-                display_url = ""
-            results.append({
-                "id": f"sensor-cam-{cam_id}",
-                "type": "camera",
-                "title": cam.get("name") or cam.get("description") or "CCTV Camera",
-                "description": cam.get("description") or "Traffic Scotland CCTV",
-                "lat": float(lat),
-                "lon": float(lon),
-                "severity": "blue",
-                "source": "Traffic Scotland (Siphon)",
-                "url": display_url,
-                "pub_date": now_iso,
-                "active": True,
-                "camera_url": display_url,
-            })
-        log.info(f"Siphon cameras: {len(results)} Ayrshire cameras (from {data.get('count', '?')} total)")
-        return results
-    # Fallback to legacy FTP/web
-    log.info("Siphon cameras unavailable, falling back to legacy FTP/web")
-    return await _legacy_fetch_traffic_cameras()
-
-
-# ─── Data Fetchers (Legacy Fallbacks) ─────────────────────────────────────────
-
-async def _legacy_fetch_tsis_incidents() -> list:
-    """[LEGACY FALLBACK] Fetch live incidents from Traffic Scotland TSIS JSON API."""
+    """Fetch live incidents from Traffic Scotland TSIS JSON API."""
     url = "https://www.traffic.gov.scot/tsis/incidents"
     results = []
     async with httpx.AsyncClient(timeout=20, follow_redirects=True) as client:
@@ -488,8 +218,8 @@ async def _legacy_fetch_tsis_incidents() -> list:
     return results
 
 
-async def _legacy_fetch_tsis_roadworks() -> list:
-    """[LEGACY FALLBACK] Fetch roadworks from Traffic Scotland TSIS JSON API."""
+async def fetch_tsis_roadworks() -> list:
+    """Fetch roadworks from Traffic Scotland TSIS JSON API."""
     url = "https://www.traffic.gov.scot/tsis/roadworks"
     results = []
     async with httpx.AsyncClient(timeout=20, follow_redirects=True) as client:
@@ -962,291 +692,8 @@ async def fetch_tomtom_incidents() -> list:
 
 
 
-def osgrid_to_latlon(easting: float, northing: float) -> tuple:
-    """Convert OS National Grid (OSGB36) easting/northing to WGS84 lat/lon.
-    Uses Helmert transformation via iterative approach."""
-    a, b = 6377563.396, 6356256.909  # Airy 1830 ellipsoid
-    F0 = 0.9996012717
-    lat0 = math.radians(49)
-    lon0 = math.radians(-2)
-    N0, E0 = -100000, 400000
-    e2 = 1 - (b * b) / (a * a)
-    n = (a - b) / (a + b)
-    n2, n3 = n * n, n * n * n
-
-    lat = lat0
-    M = 0
-    while True:
-        lat = (northing - N0 - M) / (a * F0) + lat
-        Ma = (1 + n + (5/4) * n2 + (5/4) * n3) * (lat - lat0)
-        Mb = (3 * n + 3 * n2 + (21/8) * n3) * math.sin(lat - lat0) * math.cos(lat + lat0)
-        Mc = ((15/8) * n2 + (15/8) * n3) * math.sin(2 * (lat - lat0)) * math.cos(2 * (lat + lat0))
-        Md = (35/24) * n3 * math.sin(3 * (lat - lat0)) * math.cos(3 * (lat + lat0))
-        M = b * F0 * (Ma - Mb + Mc - Md)
-        if abs(northing - N0 - M) < 0.00001:
-            break
-
-    cosLat = math.cos(lat)
-    sinLat = math.sin(lat)
-    nu = a * F0 / math.sqrt(1 - e2 * sinLat * sinLat)
-    rho = a * F0 * (1 - e2) / ((1 - e2 * sinLat * sinLat) ** 1.5)
-    eta2 = nu / rho - 1
-    tanLat = math.tan(lat)
-
-    VII = tanLat / (2 * rho * nu)
-    VIII = tanLat / (24 * rho * nu ** 3) * (5 + 3 * tanLat ** 2 + eta2 - 9 * tanLat ** 2 * eta2)
-    IX = tanLat / (720 * rho * nu ** 5) * (61 + 90 * tanLat ** 2 + 45 * tanLat ** 4)
-    X = 1 / (cosLat * nu)
-    XI = 1 / (6 * cosLat * nu ** 3) * (nu / rho + 2 * tanLat ** 2)
-    XII = 1 / (120 * cosLat * nu ** 5) * (5 + 28 * tanLat ** 2 + 24 * tanLat ** 4)
-    XIIa = 1 / (5040 * cosLat * nu ** 7) * (61 + 662 * tanLat ** 2 + 1320 * tanLat ** 4 + 720 * tanLat ** 6)
-
-    dE = easting - E0
-    lat_osgb = lat - VII * dE ** 2 + VIII * dE ** 4 - IX * dE ** 6
-    lon_osgb = lon0 + X * dE - XI * dE ** 3 + XII * dE ** 5 - XIIa * dE ** 7
-
-    # Helmert OSGB36 -> WGS84
-    tx, ty, tz = 446.448, -125.157, 542.060
-    s = -20.4894 / 1e6
-    rx = math.radians(0.1502 / 3600)
-    ry = math.radians(0.2470 / 3600)
-    rz = math.radians(0.8421 / 3600)
-
-    sin_lat = math.sin(lat_osgb)
-    cos_lat = math.cos(lat_osgb)
-    sin_lon = math.sin(lon_osgb)
-    cos_lon = math.cos(lon_osgb)
-
-    nu_os = a / math.sqrt(1 - e2 * sin_lat ** 2)
-    x1 = nu_os * cos_lat * cos_lon
-    y1 = nu_os * cos_lat * sin_lon
-    z1 = nu_os * (1 - e2) * sin_lat
-
-    x2 = tx + (1 + s) * x1 + (-rz) * y1 + (ry) * z1
-    y2 = ty + (rz) * x1 + (1 + s) * y1 + (-rx) * z1
-    z2 = tz + (-ry) * x1 + (rx) * y1 + (1 + s) * z1
-
-    a_w, b_w = 6378137.0, 6356752.3142  # WGS84 ellipsoid
-    e2_w = 1 - (b_w ** 2) / (a_w ** 2)
-    p = math.sqrt(x2 ** 2 + y2 ** 2)
-    lat_w = math.atan2(z2, p * (1 - e2_w))
-    for _ in range(10):
-        nu_w = a_w / math.sqrt(1 - e2_w * math.sin(lat_w) ** 2)
-        lat_w = math.atan2(z2 + e2_w * nu_w * math.sin(lat_w), p)
-    lon_w = math.atan2(y2, x2)
-
-    return round(math.degrees(lat_w), 6), round(math.degrees(lon_w), 6)
-
-
-# ─── FTP Camera Sensor Network ──────────────────────────────────────────────
-# Each camera is a sensor: has an ID, location, health status, last-seen, image freshness
-
-_ftp_sensors = {}       # sensor_id -> {name, image, lat, lon, easting, northing}
-_ftp_sensor_health = {} # sensor_id -> {online, last_image_ts, last_check_ts, consecutive_fails}
-_ftp_last_csv_fetch = 0
-_ftp_last_image_fetch = 0
-_ftp_fetch_running = False
-
-
-def _ftp_connect():
-    """Open FTP connection. Caller MUST close with ftp.quit() in finally block."""
-    ftp = ftplib.FTP(FTP_HOST, timeout=30)
-    ftp.login(FTP_USER, FTP_PASS)
-    return ftp
-
-
-def _fetch_camera_csv():
-    """Download and parse cameraimages.csv from FTP (blocking). Populates sensor registry."""
-    global _ftp_sensors, _ftp_last_csv_fetch
-    ftp = None
-    try:
-        ftp = _ftp_connect()
-        buf = io.BytesIO()
-        ftp.retrbinary("RETR cameraimages.csv", buf.write)
-        buf.seek(0)
-        text = buf.read().decode("utf-8-sig")
-        reader = csv.reader(io.StringIO(text))
-        header = next(reader, None)
-        sensors = {}
-        total_count = 0
-        for row in reader:
-            total_count += 1
-            if len(row) < 4:
-                continue
-            name, image, easting_s, northing_s = row[0].strip(), row[1].strip(), row[2].strip(), row[3].strip()
-            try:
-                easting = float(easting_s)
-                northing = float(northing_s)
-            except (ValueError, TypeError):
-                continue
-            lat, lon = osgrid_to_latlon(easting, northing)
-            # Filter to wider Ayrshire area
-            if not (55.1 <= lat <= 55.9 and -5.1 <= lon <= -4.1):
-                continue
-            sensor_id = image.replace(".jpg", "").replace(".", "_")
-            sensors[sensor_id] = {
-                "name": name,
-                "image": image,
-                "lat": lat,
-                "lon": lon,
-                "easting": easting,
-                "northing": northing,
-            }
-            # Initialise health if new sensor
-            if sensor_id not in _ftp_sensor_health:
-                _ftp_sensor_health[sensor_id] = {
-                    "online": False,
-                    "last_image_ts": 0,
-                    "last_check_ts": 0,
-                    "consecutive_fails": 0,
-                    "image_size": 0,
-                }
-        _ftp_sensors = sensors
-        _ftp_last_csv_fetch = time.time()
-        log.info(f"FTP sensor registry: {len(sensors)} Ayrshire cameras from {total_count} total")
-    except Exception as e:
-        log.error(f"FTP CSV fetch failed: {e}")
-    finally:
-        if ftp:
-            try:
-                ftp.quit()
-            except Exception:
-                try:
-                    ftp.close()
-                except Exception:
-                    pass
-
-
-def _fetch_camera_images():
-    """Download current camera images from FTP (blocking). Updates sensor health."""
-    global _ftp_last_image_fetch, _ftp_fetch_running
-    if not _ftp_sensors or _ftp_fetch_running:
-        return
-    _ftp_fetch_running = True
-    ftp = None
-    try:
-        ftp = _ftp_connect()
-        ftp.cwd("/current")
-        downloaded = 0
-        failed = 0
-        now = time.time()
-        for sensor_id, sensor in _ftp_sensors.items():
-            img_name = sensor["image"]
-            local_path = FTP_CAMERA_DIR / img_name
-            health = _ftp_sensor_health.get(sensor_id, {})
-            try:
-                tmp_path = FTP_CAMERA_DIR / f".{img_name}.tmp"
-                with open(tmp_path, "wb") as f:
-                    ftp.retrbinary(f"RETR {img_name}", f.write)
-                file_size = tmp_path.stat().st_size
-                if file_size > 500:  # Valid image should be > 500 bytes
-                    shutil.move(str(tmp_path), str(local_path))
-                    downloaded += 1
-                    _ftp_sensor_health[sensor_id] = {
-                        "online": True,
-                        "last_image_ts": now,
-                        "last_check_ts": now,
-                        "consecutive_fails": 0,
-                        "image_size": file_size,
-                    }
-                else:
-                    tmp_path.unlink(missing_ok=True)
-                    failed += 1
-                    _ftp_sensor_health[sensor_id] = {
-                        **health,
-                        "online": False,
-                        "last_check_ts": now,
-                        "consecutive_fails": health.get("consecutive_fails", 0) + 1,
-                    }
-            except Exception:
-                failed += 1
-                _ftp_sensor_health[sensor_id] = {
-                    **health,
-                    "online": False,
-                    "last_check_ts": now,
-                    "consecutive_fails": health.get("consecutive_fails", 0) + 1,
-                }
-                # Clean up tmp file
-                tmp = FTP_CAMERA_DIR / f".{img_name}.tmp"
-                tmp.unlink(missing_ok=True)
-        _ftp_last_image_fetch = now
-        log.info(f"FTP sensor images: {downloaded} OK, {failed} failed out of {len(_ftp_sensors)}")
-    except Exception as e:
-        log.error(f"FTP image fetch failed: {e}")
-    finally:
-        _ftp_fetch_running = False
-        if ftp:
-            try:
-                ftp.quit()
-            except Exception:
-                try:
-                    ftp.close()
-                except Exception:
-                    pass
-
-
-async def ftp_camera_refresh_loop():
-    """Background loop: fetch camera CSV + images from FTP every 20 min."""
-    await asyncio.sleep(3)  # Let server start
-    loop = asyncio.get_event_loop()
-    while True:
-        try:
-            now = time.time()
-            # Refresh CSV once per day
-            if now - _ftp_last_csv_fetch > FTP_CSV_CACHE_TTL:
-                log.info("FTP sensors: refreshing camera registry CSV...")
-                await loop.run_in_executor(None, _fetch_camera_csv)
-            # Refresh images every 20 min
-            if now - _ftp_last_image_fetch > FTP_FETCH_INTERVAL:
-                log.info("FTP sensors: pulling camera images...")
-                await loop.run_in_executor(None, _fetch_camera_images)
-        except Exception as e:
-            log.error(f"FTP sensor loop error: {e}")
-        await asyncio.sleep(60)  # Check every minute, only fetch when interval passed
-
-
-async def _legacy_fetch_traffic_cameras() -> list:
-    """[LEGACY FALLBACK] Return camera list from FTP sensor registry (falls back to web API on first boot)."""
-    if _ftp_sensors:
-        results = []
-        now_iso = datetime.now(timezone.utc).isoformat()
-        for sensor_id, sensor in _ftp_sensors.items():
-            health = _ftp_sensor_health.get(sensor_id, {})
-            img_file = FTP_CAMERA_DIR / sensor["image"]
-            has_image = img_file.exists() and img_file.stat().st_size > 500
-            age_secs = time.time() - health.get("last_image_ts", 0) if health.get("last_image_ts") else None
-            # Freshness: green < 25 min, amber < 60 min, red > 60 min / offline
-            if has_image and age_secs and age_secs < 1500:
-                freshness = "live"
-            elif has_image and age_secs and age_secs < 3600:
-                freshness = "stale"
-            else:
-                freshness = "offline"
-            results.append({
-                "id": f"sensor-cam-{sensor_id}",
-                "type": "camera",
-                "title": sensor["name"],
-                "description": f"Traffic Scotland CCTV — {freshness}",
-                "lat": sensor["lat"],
-                "lon": sensor["lon"],
-                "severity": "blue",
-                "source": "Traffic Scotland FTP",
-                "url": f"/api/cameras/image/{sensor['image']}" if has_image else "",
-                "pub_date": now_iso,
-                "active": health.get("online", False),
-                "camera_url": f"/api/cameras/image/{sensor['image']}" if has_image else "",
-                "sensor_id": sensor_id,
-                "sensor_health": {
-                    "online": health.get("online", False),
-                    "freshness": freshness,
-                    "last_image": datetime.fromtimestamp(health["last_image_ts"], tz=timezone.utc).isoformat() if health.get("last_image_ts") else None,
-                    "consecutive_fails": health.get("consecutive_fails", 0),
-                    "image_size_bytes": health.get("image_size", 0),
-                },
-            })
-        return results
-
-    # Fallback to web API if FTP hasn't loaded yet (first 3 seconds)
+async def fetch_traffic_cameras() -> list:
+    """Fetch CCTV camera stills from Traffic Scotland."""
     cached = cache_get("traffic_cameras")
     if cached is not None:
         return cached.get("items", [])
@@ -1267,6 +714,7 @@ async def _legacy_fetch_traffic_cameras() -> list:
                         continue
                     if not lat or not lng:
                         continue
+                    # Filter to wider Ayrshire area
                     if not (55.1 <= lat <= 55.9 and -5.1 <= lng <= -4.1):
                         continue
                     image_url = camera.get("imageUrl") or ""
@@ -1285,9 +733,10 @@ async def _legacy_fetch_traffic_cameras() -> list:
                         "camera_url": image_url,
                     })
         except Exception as e:
-            log.warning(f"Traffic cameras web API fallback failed: {e}")
+            log.warning(f"Traffic cameras fetch failed: {e}")
 
-    log.info(f"Traffic cameras: {len(results)} (web API fallback)")
+    log.info(f"Traffic cameras: {len(results)} Ayrshire cameras")
+    # Cache with 600s TTL - cameras dont move, images update
     cache_set("traffic_cameras", {"items": results})
     return results
 
@@ -1604,8 +1053,8 @@ async def fetch_datex2_xml(publication: str) -> Optional[ET.Element]:
     return None
 
 
-async def _legacy_fetch_datex2_events() -> list:
-    """[LEGACY FALLBACK] Fetch unplanned events (accidents, breakdowns, etc.) from DATEX II."""
+async def fetch_datex2_events() -> list:
+    """Fetch unplanned events (accidents, breakdowns, etc.) from DATEX II."""
     root = await fetch_datex2_xml("UnplannedEvents")
     if root is None:
         return []
@@ -1721,8 +1170,8 @@ async def _legacy_fetch_datex2_events() -> list:
     return results
 
 
-async def _legacy_fetch_datex2_roadworks() -> list:
-    """[LEGACY FALLBACK] Fetch current and future roadworks from DATEX II."""
+async def fetch_datex2_roadworks() -> list:
+    """Fetch current and future roadworks from DATEX II."""
     results = []
 
     for pub_name in ("CurrentRoadworks", "FutureRoadworks"):
@@ -2187,8 +1636,6 @@ async def nuro_heartbeat_loop():
                         "stats": {
                             "incidents": meta.get("total_incidents", 0),
                             "roadworks": meta.get("total_roadworks", 0),
-                            "camera_sensors": len(_ftp_sensors),
-                            "camera_sensors_online": sum(1 for h in _ftp_sensor_health.values() if h.get("online")),
                             "sources": meta.get("sources_active", 0),
                             "last_refresh": meta.get("updated_at"),
                         },
@@ -2207,7 +1654,6 @@ async def lifespan(app: FastAPI):
     global _refresh_task
     _refresh_task = asyncio.create_task(refresh_loop())
     asyncio.create_task(nuro_heartbeat_loop())
-    asyncio.create_task(ftp_camera_refresh_loop())
     yield
     if _refresh_task:
         _refresh_task.cancel()
@@ -2335,20 +1781,12 @@ async def nuro():
             "color": "#f59e0b",
         },
         {
-            "id": "camera_sensors",
-            "label": "CCTV Sensors",
-            "type": "sensor_grid",
-            "value": len(_ftp_sensors),
-            "unit": "cameras",
+            "id": "cameras",
+            "label": "CCTV Cameras",
+            "type": "stat",
+            "value": meta.get("total_cameras", 0),
+            "unit": "live",
             "color": "#3b82f6",
-            "detail": {
-                "source": "traffic_scotland_ftp",
-                "online": sum(1 for h in _ftp_sensor_health.values() if h.get("online")),
-                "offline": sum(1 for h in _ftp_sensor_health.values() if not h.get("online")),
-                "health_pct": round(sum(1 for h in _ftp_sensor_health.values() if h.get("online")) / max(len(_ftp_sensors), 1) * 100),
-                "fetch_interval": FTP_FETCH_INTERVAL,
-                "last_fetch": datetime.fromtimestamp(_ftp_last_image_fetch, tz=timezone.utc).isoformat() if _ftp_last_image_fetch else None,
-            },
         },
         {
             "id": "ferries",
@@ -2456,146 +1894,6 @@ async def get_cameras():
     return JSONResponse({"items": cameras, "count": len(cameras)})
 
 
-@app.get("/api/cameras/image/{filename}")
-async def get_camera_image(filename: str):
-    """Serve a locally-cached FTP camera image."""
-    safe_name = Path(filename).name
-    if not safe_name.endswith(".jpg"):
-        raise HTTPException(status_code=400, detail="Invalid filename")
-    img_path = FTP_CAMERA_DIR / safe_name
-    if not img_path.exists():
-        raise HTTPException(status_code=404, detail="Camera image not found")
-    return FileResponse(
-        str(img_path),
-        media_type="image/jpeg",
-        headers={
-            "Cache-Control": "public, max-age=300",
-            "X-Sensor-Updated": datetime.fromtimestamp(
-                img_path.stat().st_mtime, tz=timezone.utc
-            ).isoformat(),
-        },
-    )
-
-
-@app.get("/api/cameras/sensors")
-async def camera_sensors():
-    """Full sensor network status — nuro-style sensor report."""
-    now = time.time()
-    sensors_out = []
-    online = 0
-    stale = 0
-    offline = 0
-    for sensor_id, sensor in _ftp_sensors.items():
-        health = _ftp_sensor_health.get(sensor_id, {})
-        age = now - health.get("last_image_ts", 0) if health.get("last_image_ts") else None
-        if health.get("online") and age and age < 1500:
-            status = "live"
-            online += 1
-        elif health.get("online") and age and age < 3600:
-            status = "stale"
-            stale += 1
-        else:
-            status = "offline"
-            offline += 1
-        sensors_out.append({
-            "sensor_id": sensor_id,
-            "name": sensor["name"],
-            "lat": sensor["lat"],
-            "lon": sensor["lon"],
-            "status": status,
-            "last_image_age_seconds": round(age) if age else None,
-            "consecutive_fails": health.get("consecutive_fails", 0),
-            "image_url": f"/api/cameras/image/{sensor['image']}",
-        })
-    return JSONResponse({
-        "source": "traffic_scotland_ftp",
-        "total_sensors": len(_ftp_sensors),
-        "online": online,
-        "stale": stale,
-        "offline": offline,
-        "health_pct": round(online / max(len(_ftp_sensors), 1) * 100),
-        "last_csv_fetch": datetime.fromtimestamp(_ftp_last_csv_fetch, tz=timezone.utc).isoformat() if _ftp_last_csv_fetch else None,
-        "last_image_fetch": datetime.fromtimestamp(_ftp_last_image_fetch, tz=timezone.utc).isoformat() if _ftp_last_image_fetch else None,
-        "fetch_interval_seconds": FTP_FETCH_INTERVAL,
-        "sensors": sensors_out,
-    })
-
-
-
-# ─── Vision Analysis Proxy ────────────────────────────────────────────────────
-
-VISION_SERVICE = "http://localhost:3878"
-
-@app.get("/api/vision")
-async def vision_proxy():
-    """Proxy full vision analysis from camera-vision service."""
-    try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            resp = await client.get(f"{VISION_SERVICE}/api/analysis")
-            return JSONResponse(resp.json(), status_code=resp.status_code)
-    except Exception as e:
-        log.warning(f"Vision service unavailable: {e}")
-        return JSONResponse({"error": "Vision service unavailable"}, status_code=503)
-
-
-@app.get("/api/vision/summary")
-async def vision_summary_proxy():
-    """Proxy vision summary from camera-vision service."""
-    try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            resp = await client.get(f"{VISION_SERVICE}/api/analysis/summary")
-            return JSONResponse(resp.json(), status_code=resp.status_code)
-    except Exception as e:
-        log.warning(f"Vision service unavailable: {e}")
-        return JSONResponse({"error": "Vision service unavailable"}, status_code=503)
-
-
-
-
-@app.get("/api/vision/alerts")
-async def vision_alerts_proxy():
-    """Proxy vision alerts from camera-vision service."""
-    try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            resp = await client.get(f"{VISION_SERVICE}/api/analysis/alerts")
-            return JSONResponse(resp.json(), status_code=resp.status_code)
-    except Exception as e:
-        log.warning(f"Vision service unavailable: {e}")
-        return JSONResponse({"error": "Vision service unavailable", "alerts": []}, status_code=503)
-
-@app.get("/api/vision/heatmap")
-async def vision_heatmap_proxy():
-    """Proxy heatmap data from camera-vision service."""
-    try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            resp = await client.get(f"{VISION_SERVICE}/api/analysis/heatmap")
-            return JSONResponse(resp.json(), status_code=resp.status_code)
-    except Exception as e:
-        return JSONResponse({}, status_code=503)
-
-
-@app.get("/api/vision/incidents")
-async def vision_incidents_proxy():
-    """Proxy incident data from camera-vision service."""
-    try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            resp = await client.get(f"{VISION_SERVICE}/api/analysis/incidents")
-            return JSONResponse(resp.json(), status_code=resp.status_code)
-    except Exception as e:
-        return JSONResponse({"incidents": {}, "descriptions": {}}, status_code=503)
-
-
-@app.get("/api/vision/history/{sensor_id}")
-async def vision_history_proxy(sensor_id: str, hours: int = 24):
-    """Proxy historical traffic data from camera-vision service."""
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.get(f"{VISION_SERVICE}/api/analysis/history/{sensor_id}?hours={hours}")
-            return JSONResponse(resp.json(), status_code=resp.status_code)
-    except Exception as e:
-        return JSONResponse({"error": str(e)}, status_code=503)
-
-
 @app.post("/api/refresh")
 async def force_refresh():
     """Force a data refresh."""
@@ -2619,44 +1917,7 @@ async def serve_index():
     return {"error": "Frontend not built"}
 
 
-@app.get("/cctv")
-async def serve_cctv():
-    """CCTV Control Centre — sensor grid view."""
-    cctv = STATIC_DIR / "cctv.html"
-    if cctv.exists():
-        return FileResponse(str(cctv))
-    return {"error": "CCTV page not found"}
-
-
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
-
-
-# -- Siphon Integration -------------------------------------------------------
-
-async def siphon_get(path: str) -> dict | None:
-    """Fetch from Siphon cache service (PRIMARY data source). Returns None on any failure."""
-    try:
-        async with httpx.AsyncClient(timeout=8.0) as client:
-            resp = await client.get(f"{SIPHON_URL}{path}")
-            resp.raise_for_status()
-            return resp.json()
-    except Exception as e:
-        log.warning(f"Siphon fetch failed for {path}: {e}")
-        return None
-
-
-@app.get("/api/siphon-incidents")
-async def siphon_incidents():
-    """Transport Scotland incidents and roadworks via Siphon (supplementary/fallback)."""
-    incidents = await siphon_get("/api/transport/incidents")
-    roadworks = await siphon_get("/api/transport/roadworks")
-    if incidents is None and roadworks is None:
-        raise HTTPException(status_code=502, detail="Siphon transport data unavailable")
-    return JSONResponse({
-        "incidents": incidents if incidents is not None else [],
-        "roadworks": roadworks if roadworks is not None else [],
-        "source": "siphon",
-    })
 
 
 if __name__ == "__main__":

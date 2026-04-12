@@ -1,0 +1,820 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CCTV Control Centre — AyrTraffic</title>
+
+  <!-- WispAyr Design System -->
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/WispAyr/wispayr-design@main/css/wispayr.css">
+  <!-- Leaflet for mini-map -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+  <style>
+    :root {
+      --grid-cols: 8;
+      --grid-gap: 6px;
+    }
+
+    body {
+      height: 100vh;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      background: #0a0e17;
+    }
+
+    .w-header { flex-shrink: 0; }
+    .w-footer { display: none; }
+
+    /* ── Top Bar ── */
+    #topbar {
+      background: var(--w-bg-card, #1a1f2e);
+      border-bottom: 1px solid var(--w-border, #2a2f3e);
+      display: flex;
+      align-items: center;
+      padding: 6px 16px;
+      gap: 12px;
+      flex-shrink: 0;
+      z-index: 100;
+      flex-wrap: wrap;
+    }
+
+    .topbar-title {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-weight: 800;
+      font-size: 15px;
+      letter-spacing: -0.02em;
+      white-space: nowrap;
+    }
+
+    .topbar-title .icon { font-size: 20px; }
+
+    .sensor-stats {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      margin-left: 8px;
+    }
+
+    .sensor-pill {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      padding: 2px 8px;
+      border-radius: 6px;
+      font-size: 11px;
+      font-weight: 600;
+      white-space: nowrap;
+    }
+    .sensor-pill.online  { background: rgba(34,197,94,.12); color: #22c55e; }
+    .sensor-pill.stale   { background: rgba(245,158,11,.12); color: #f59e0b; }
+    .sensor-pill.offline { background: rgba(239,68,68,.12); color: #ef4444; }
+
+    .health-bar {
+      width: 80px;
+      height: 5px;
+      border-radius: 3px;
+      background: rgba(255,255,255,.08);
+      overflow: hidden;
+    }
+    .health-bar-fill {
+      height: 100%;
+      border-radius: 3px;
+      background: #22c55e;
+      transition: width 0.8s ease;
+    }
+
+    .topbar-right {
+      margin-left: auto;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    #search-input {
+      background: rgba(255,255,255,.06);
+      border: 1px solid rgba(255,255,255,.1);
+      border-radius: 6px;
+      padding: 4px 10px;
+      font-size: 12px;
+      color: var(--w-text, #e2e8f0);
+      outline: none;
+      width: 150px;
+      transition: border .2s;
+    }
+    #search-input:focus { border-color: #3b82f6; }
+    #search-input::placeholder { color: rgba(255,255,255,.3); }
+
+    .grid-btn {
+      background: rgba(255,255,255,.06);
+      border: 1px solid rgba(255,255,255,.1);
+      border-radius: 6px;
+      padding: 4px 8px;
+      font-size: 11px;
+      color: var(--w-text-muted, #94a3b8);
+      cursor: pointer;
+      transition: all .2s;
+      white-space: nowrap;
+    }
+    .grid-btn:hover { background: rgba(255,255,255,.1); }
+    .grid-btn.active { background: #3b82f6; color: #fff; border-color: #3b82f6; }
+
+    #last-fetch {
+      font-size: 10px;
+      color: var(--w-text-light, #64748b);
+      white-space: nowrap;
+    }
+
+    /* ── Zone Filter Strip ── */
+    #zone-bar {
+      background: var(--w-bg-card, #1a1f2e);
+      border-bottom: 1px solid var(--w-border, #2a2f3e);
+      display: flex;
+      align-items: center;
+      padding: 4px 16px;
+      gap: 6px;
+      flex-shrink: 0;
+      overflow-x: auto;
+      overflow-y: hidden;
+    }
+
+    .zone-btn {
+      background: rgba(255,255,255,.04);
+      border: 1px solid rgba(255,255,255,.08);
+      border-radius: 16px;
+      padding: 3px 12px;
+      font-size: 11px;
+      font-weight: 500;
+      color: var(--w-text-muted, #94a3b8);
+      cursor: pointer;
+      transition: all .2s;
+      white-space: nowrap;
+      display: flex;
+      align-items: center;
+      gap: 5px;
+    }
+    .zone-btn:hover { background: rgba(255,255,255,.08); color: var(--w-text, #e2e8f0); }
+    .zone-btn.active { background: #3b82f6; color: #fff; border-color: #3b82f6; }
+    .zone-count {
+      background: rgba(255,255,255,.15);
+      border-radius: 8px;
+      padding: 0 5px;
+      font-size: 10px;
+      font-weight: 700;
+      min-width: 16px;
+      text-align: center;
+    }
+    .zone-btn.active .zone-count { background: rgba(255,255,255,.25); }
+
+    /* ── Camera Grid ── */
+    #camera-grid {
+      flex: 1;
+      overflow-y: auto;
+      overflow-x: hidden;
+      padding: var(--grid-gap);
+      display: grid;
+      grid-template-columns: repeat(var(--grid-cols), 1fr);
+      gap: var(--grid-gap);
+      align-content: start;
+    }
+
+    .cam-tile {
+      position: relative;
+      background: #111827;
+      border: 1px solid rgba(255,255,255,.06);
+      border-radius: 6px;
+      overflow: hidden;
+      aspect-ratio: 4 / 3;
+      cursor: pointer;
+      transition: border-color .2s, box-shadow .2s;
+    }
+    .cam-tile:hover {
+      border-color: #3b82f6;
+      box-shadow: 0 0 12px rgba(59,130,246,.2);
+    }
+    .cam-tile.offline { opacity: 0.45; }
+
+    .cam-tile img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+    }
+
+    .cam-overlay {
+      position: absolute;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      padding: 20px 8px 6px;
+      background: linear-gradient(transparent, rgba(0,0,0,.85));
+      display: flex;
+      align-items: flex-end;
+      justify-content: space-between;
+    }
+
+    .cam-name {
+      font-size: 11px;
+      font-weight: 600;
+      color: #fff;
+      text-shadow: 0 1px 3px rgba(0,0,0,.8);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      max-width: 70%;
+    }
+
+    .cam-status {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      font-size: 10px;
+      font-weight: 600;
+    }
+    .cam-status-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+    }
+    .cam-status.live .cam-status-dot { background: #22c55e; box-shadow: 0 0 6px #22c55e; }
+    .cam-status.live { color: #22c55e; }
+    .cam-status.stale .cam-status-dot { background: #f59e0b; box-shadow: 0 0 6px #f59e0b; }
+    .cam-status.stale { color: #f59e0b; }
+    .cam-status.offline .cam-status-dot { background: #ef4444; }
+    .cam-status.offline { color: #ef4444; }
+
+    .cam-topbar {
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      padding: 4px 8px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      background: linear-gradient(rgba(0,0,0,.6), transparent);
+    }
+
+    .cam-id {
+      font-size: 9px;
+      font-weight: 600;
+      color: rgba(255,255,255,.5);
+      font-family: 'Courier New', monospace;
+    }
+
+    .cam-age {
+      font-size: 9px;
+      color: rgba(255,255,255,.4);
+    }
+
+    /* ── Lightbox ── */
+    #lightbox {
+      display: none;
+      position: fixed;
+      inset: 0;
+      z-index: 9999;
+      background: rgba(0,0,0,.92);
+      backdrop-filter: blur(8px);
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+    }
+    #lightbox.open { display: flex; }
+
+    .lb-close {
+      position: absolute;
+      top: 16px;
+      right: 24px;
+      font-size: 28px;
+      color: rgba(255,255,255,.6);
+      cursor: pointer;
+      transition: color .2s;
+      z-index: 10;
+    }
+    .lb-close:hover { color: #fff; }
+
+    .lb-content {
+      max-width: 90vw;
+      max-height: 80vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .lb-img {
+      max-width: 100%;
+      max-height: 70vh;
+      border-radius: 8px;
+      border: 2px solid rgba(255,255,255,.1);
+      box-shadow: 0 8px 40px rgba(0,0,0,.6);
+    }
+
+    .lb-info {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      color: #e2e8f0;
+    }
+
+    .lb-name { font-size: 18px; font-weight: 700; }
+
+    .lb-meta { font-size: 13px; color: #94a3b8; }
+
+    .lb-nav {
+      display: flex;
+      gap: 10px;
+      margin-top: 8px;
+    }
+
+    .lb-nav-btn {
+      background: rgba(255,255,255,.08);
+      border: 1px solid rgba(255,255,255,.15);
+      border-radius: 8px;
+      padding: 8px 20px;
+      color: #e2e8f0;
+      cursor: pointer;
+      font-size: 13px;
+      transition: all .2s;
+    }
+    .lb-nav-btn:hover { background: rgba(255,255,255,.15); }
+
+    /* ── Mini Map ── */
+    #minimap-wrap {
+      position: fixed;
+      bottom: 16px;
+      right: 16px;
+      z-index: 500;
+    }
+    #minimap {
+      width: 240px;
+      height: 180px;
+      border-radius: 8px;
+      border: 1px solid rgba(255,255,255,.15);
+      overflow: hidden;
+      box-shadow: 0 4px 20px rgba(0,0,0,.5);
+    }
+    @media (max-width: 1100px) {
+      #minimap { width: 180px; height: 130px; }
+    }
+    @media (max-width: 768px) {
+      #minimap-wrap { display: none; }
+    }
+
+    /* ── No results ── */
+    .no-results {
+      grid-column: 1 / -1;
+      text-align: center;
+      padding: 60px 20px;
+      color: var(--w-text-muted, #64748b);
+      font-size: 15px;
+    }
+
+    /* ── Responsive ── */
+    @media (max-width: 900px) {
+      :root { --grid-cols: 2; }
+      #topbar { padding: 6px 10px; }
+      .sensor-stats { display: none; }
+      #search-input { width: 100px; }
+    }
+
+    /* ── Scrollbar ── */
+    #camera-grid::-webkit-scrollbar { width: 6px; }
+    #camera-grid::-webkit-scrollbar-track { background: transparent; }
+    #camera-grid::-webkit-scrollbar-thumb { background: rgba(255,255,255,.1); border-radius: 3px; }
+    #camera-grid::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,.2); }
+
+    /* ── Loading Shimmer ── */
+    .cam-tile.loading {
+      background: linear-gradient(110deg, #111827 30%, #1a2332 50%, #111827 70%);
+      background-size: 200% 100%;
+      animation: shimmer 1.5s infinite;
+    }
+    @keyframes shimmer {
+      0% { background-position: 200% 0; }
+      100% { background-position: -200% 0; }
+    }
+
+    /* ── Zone Bar Scrollbar ── */
+    #zone-bar::-webkit-scrollbar { height: 3px; }
+    #zone-bar::-webkit-scrollbar-thumb { background: rgba(255,255,255,.1); border-radius: 2px; }
+  </style>
+</head>
+<body>
+
+  <!-- WispAyr header injected by wispayr.js -->
+
+  <div id="topbar">
+    <div class="topbar-title">
+      <span class="icon">📹</span>
+      <span>CCTV Control Centre</span>
+    </div>
+
+    <div class="sensor-stats">
+      <span class="sensor-pill online"><span id="stat-online">—</span> Online</span>
+      <span class="sensor-pill stale"><span id="stat-stale">—</span> Stale</span>
+      <span class="sensor-pill offline"><span id="stat-offline">—</span> Offline</span>
+      <div class="health-bar"><div class="health-bar-fill" id="health-fill" style="width:0%"></div></div>
+    </div>
+
+    <div class="topbar-right">
+      <input type="text" id="search-input" placeholder="Search cameras..." autocomplete="off">
+      <button class="grid-btn" data-cols="2" title="2×2">⊞ 2</button>
+      <button class="grid-btn" data-cols="4" title="4×4">⊞ 4</button>
+      <button class="grid-btn" data-cols="6" title="6×6">⊞ 6</button>
+      <button class="grid-btn active" data-cols="8" title="8×8">⊞ 8</button>
+      <span id="last-fetch">—</span>
+    </div>
+  </div>
+
+  <div id="zone-bar">
+    <!-- Zone buttons injected by JS -->
+  </div>
+
+  <div id="minimap-wrap">
+    <div id="minimap"></div>
+  </div>
+
+  <div id="camera-grid">
+    <!-- Camera tiles injected by JS -->
+  </div>
+
+  <!-- Lightbox -->
+  <div id="lightbox">
+    <span class="lb-close" onclick="closeLightbox()">&times;</span>
+    <div class="lb-content">
+      <img class="lb-img" id="lb-img" src="" alt="">
+      <div class="lb-info">
+        <span class="lb-name" id="lb-name"></span>
+        <span class="lb-meta" id="lb-meta"></span>
+      </div>
+      <div class="lb-nav">
+        <button class="lb-nav-btn" onclick="lbNav(-1)">&#9664; Previous</button>
+        <button class="lb-nav-btn" onclick="lbRefresh()">&#8635; Refresh</button>
+        <button class="lb-nav-btn" onclick="lbNav(1)">Next &#9654;</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/gh/WispAyr/wispayr-design@main/js/wispayr.js"></script>
+  <script>
+    if (window.WispAyr) WispAyr.init('traffic');
+  </script>
+
+  <script>
+    // ── Zone Definitions ──
+    // Cameras are classified into geographic zones by lat/lon bounding boxes
+    const ZONES = [
+      {
+        id: 'all',
+        label: 'All Cameras',
+        icon: '📡',
+        match: () => true,  // matches everything
+      },
+      {
+        id: 'gla-centre',
+        label: 'Glasgow Centre',
+        icon: '🏙️',
+        match: (s) => s.lat >= 55.84 && s.lat <= 55.89 && s.lon >= -4.30 && s.lon <= -4.22,
+      },
+      {
+        id: 'gla-west',
+        label: 'Glasgow West / Airport',
+        icon: '✈️',
+        match: (s) => s.lat >= 55.84 && s.lat <= 55.90 && s.lon >= -4.50 && s.lon < -4.30,
+      },
+      {
+        id: 'gla-east',
+        label: 'Glasgow East',
+        icon: '🏭',
+        match: (s) => s.lat >= 55.83 && s.lat <= 55.90 && s.lon >= -4.22 && s.lon <= -4.10,
+      },
+      {
+        id: 'gla-south',
+        label: 'Glasgow South / M77',
+        icon: '🛣️',
+        match: (s) => s.lat >= 55.78 && s.lat < 55.84 && s.lon >= -4.36 && s.lon <= -4.18,
+      },
+      {
+        id: 'east-ren',
+        label: 'East Renfrewshire',
+        icon: '🌿',
+        match: (s) => s.lat >= 55.74 && s.lat < 55.80 && s.lon >= -4.40 && s.lon <= -4.20,
+      },
+      {
+        id: 'kilmarnock',
+        label: 'Kilmarnock / A77',
+        icon: '🔄',
+        match: (s) => s.lat >= 55.62 && s.lat < 55.74 && s.lon >= -4.50 && s.lon <= -4.25,
+      },
+      {
+        id: 'south-ayr',
+        label: 'South Ayrshire',
+        icon: '🏴󠁧󠁢󠁳󠁣󠁴󠁿',
+        match: (s) => s.lat < 55.55 && s.lon <= -4.10,
+      },
+      {
+        id: 'coast',
+        label: 'Ayrshire Coast',
+        icon: '🌊',
+        match: (s) => s.lat >= 55.55 && s.lat < 55.75 && s.lon < -4.50,
+      },
+    ];
+
+    // Recommended grid sizes per zone
+    const ZONE_GRID = {
+      'all': 8,
+      'gla-centre': 4,
+      'gla-west': 4,
+      'gla-east': 4,
+      'gla-south': 3,
+      'east-ren': 3,
+      'kilmarnock': 2,
+      'south-ayr': 2,
+      'coast': 2,
+    };
+
+    // ── State ──
+    let allSensors = [];
+    let filteredSensors = [];
+    let currentLbIndex = -1;
+    let autoRefreshTimer = null;
+    let activeZone = 'all';
+
+    const grid = document.getElementById('camera-grid');
+    const searchInput = document.getElementById('search-input');
+    const gridBtns = document.querySelectorAll('.grid-btn');
+    const zoneBar = document.getElementById('zone-bar');
+
+    // ── Grid Size ──
+    function setGridCols(n) {
+      document.documentElement.style.setProperty('--grid-cols', n);
+      gridBtns.forEach(b => {
+        b.classList.toggle('active', parseInt(b.dataset.cols) === n);
+      });
+    }
+
+    gridBtns.forEach(btn => {
+      btn.addEventListener('click', () => {
+        setGridCols(parseInt(btn.dataset.cols));
+      });
+    });
+
+    // ── Zone Buttons ──
+    function renderZoneBar() {
+      zoneBar.innerHTML = ZONES.map(z => {
+        const count = z.id === 'all'
+          ? allSensors.length
+          : allSensors.filter(s => z.match(s)).length;
+        if (count === 0 && z.id !== 'all') return '';
+        return `<button class="zone-btn ${z.id === activeZone ? 'active' : ''}" data-zone="${z.id}">
+          ${z.icon} ${z.label} <span class="zone-count">${count}</span>
+        </button>`;
+      }).join('');
+
+      zoneBar.querySelectorAll('.zone-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+          activeZone = btn.dataset.zone;
+          // Auto-set grid size for zone
+          const recCols = ZONE_GRID[activeZone] || 4;
+          setGridCols(recCols);
+          applyFilters();
+          renderZoneBar();
+        });
+      });
+    }
+
+    // ── Combined Filter (zone + search) ──
+    function applyFilters() {
+      const q = searchInput.value.toLowerCase().trim();
+      const zone = ZONES.find(z => z.id === activeZone) || ZONES[0];
+
+      filteredSensors = allSensors.filter(s => {
+        if (!zone.match(s)) return false;
+        if (q && !(s.name.toLowerCase().includes(q) || s.sensor_id.toLowerCase().includes(q))) return false;
+        return true;
+      });
+
+      renderGrid();
+    }
+
+    // ── Search ──
+    searchInput.addEventListener('input', () => applyFilters());
+
+    // ── Keyboard Shortcuts ──
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') closeLightbox();
+      if (document.getElementById('lightbox').classList.contains('open')) {
+        if (e.key === 'ArrowLeft') lbNav(-1);
+        if (e.key === 'ArrowRight') lbNav(1);
+        if (e.key === 'r') lbRefresh();
+      }
+      if (e.key === '/' && !e.ctrlKey && !e.metaKey && document.activeElement !== searchInput) {
+        e.preventDefault();
+        searchInput.focus();
+      }
+    });
+
+    // ── Fetch Sensors ──
+    async function fetchSensors() {
+      try {
+        const resp = await fetch('/api/cameras/sensors');
+        const data = await resp.json();
+
+        document.getElementById('stat-online').textContent = data.online || 0;
+        document.getElementById('stat-stale').textContent = data.stale || 0;
+        document.getElementById('stat-offline').textContent = data.offline || 0;
+        document.getElementById('health-fill').style.width = (data.health_pct || 0) + '%';
+
+        const hpct = data.health_pct || 0;
+        const fill = document.getElementById('health-fill');
+        fill.style.background = hpct > 80 ? '#22c55e' : hpct > 50 ? '#f59e0b' : '#ef4444';
+
+        if (data.last_image_fetch) {
+          const t = new Date(data.last_image_fetch);
+          document.getElementById('last-fetch').textContent = 'Last pull: ' + t.toLocaleTimeString('en-GB');
+        }
+
+        allSensors = (data.sensors || []).sort((a, b) => {
+          const order = { live: 0, stale: 1, offline: 2 };
+          const diff = (order[a.status] || 2) - (order[b.status] || 2);
+          if (diff !== 0) return diff;
+          return a.name.localeCompare(b.name);
+        });
+
+        renderZoneBar();
+        applyFilters();
+      } catch (err) {
+        console.error('Sensor fetch failed:', err);
+      }
+    }
+
+    // ── Format Age ──
+    function formatAge(seconds) {
+      if (!seconds && seconds !== 0) return '—';
+      if (seconds < 60) return Math.round(seconds) + 's ago';
+      if (seconds < 3600) return Math.round(seconds / 60) + 'm ago';
+      return Math.round(seconds / 3600) + 'h ago';
+    }
+
+    // ── Render Grid ──
+    function renderGrid() {
+      if (filteredSensors.length === 0 && allSensors.length > 0) {
+        grid.innerHTML = '<div class="no-results">No cameras match your filters</div>';
+        return;
+      }
+      if (filteredSensors.length === 0) {
+        grid.innerHTML = '';
+        for (let i = 0; i < 16; i++) {
+          grid.innerHTML += '<div class="cam-tile loading"></div>';
+        }
+        return;
+      }
+
+      const bust = Math.floor(Date.now() / 60000);
+      grid.innerHTML = filteredSensors.map((s, idx) => {
+        const statusClass = s.status || 'offline';
+        const statusLabel = s.status === 'live' ? 'LIVE' : s.status === 'stale' ? 'STALE' : 'OFFLINE';
+        const isOffline = s.status === 'offline';
+        const imgSrc = isOffline ? '' : s.image_url + '?t=' + bust;
+        const age = formatAge(s.last_image_age_seconds);
+
+        return `
+          <div class="cam-tile ${isOffline ? 'offline' : ''}" onclick="openLightbox(${idx})" data-idx="${idx}">
+            ${imgSrc ? `<img src="${imgSrc}" alt="${s.name}" loading="lazy" onerror="this.style.display='none'">` : ''}
+            <div class="cam-topbar">
+              <span class="cam-id">${s.sensor_id}</span>
+              <span class="cam-age">${age}</span>
+            </div>
+            <div class="cam-overlay">
+              <span class="cam-name">${s.name}</span>
+              <span class="cam-status ${statusClass}">
+                <span class="cam-status-dot"></span>
+                ${statusLabel}
+              </span>
+            </div>
+          </div>
+        `;
+      }).join('');
+    }
+
+    // ── Lightbox ──
+    function openLightbox(idx) {
+      if (idx < 0 || idx >= filteredSensors.length) return;
+      currentLbIndex = idx;
+      const s = filteredSensors[idx];
+      const lb = document.getElementById('lightbox');
+      const img = document.getElementById('lb-img');
+      const name = document.getElementById('lb-name');
+      const meta = document.getElementById('lb-meta');
+
+      const bust = Date.now();
+      img.src = s.image_url + '?t=' + bust;
+      name.textContent = s.name;
+
+      const age = formatAge(s.last_image_age_seconds);
+      const statusLabel = s.status === 'live' ? '\uD83D\uDFE2 LIVE' : s.status === 'stale' ? '\uD83D\uDFE1 STALE' : '\uD83D\uDD34 OFFLINE';
+      meta.textContent = statusLabel + '  \u2022  ' + age + '  \u2022  ' + s.sensor_id;
+
+      lb.classList.add('open');
+
+      clearInterval(autoRefreshTimer);
+      autoRefreshTimer = setInterval(() => {
+        img.src = s.image_url + '?t=' + Date.now();
+      }, 30000);
+    }
+
+    function closeLightbox() {
+      document.getElementById('lightbox').classList.remove('open');
+      clearInterval(autoRefreshTimer);
+      currentLbIndex = -1;
+    }
+
+    function lbNav(dir) {
+      if (currentLbIndex < 0) return;
+      const next = currentLbIndex + dir;
+      if (next >= 0 && next < filteredSensors.length) {
+        openLightbox(next);
+      }
+    }
+
+    function lbRefresh() {
+      if (currentLbIndex < 0) return;
+      const s = filteredSensors[currentLbIndex];
+      document.getElementById('lb-img').src = s.image_url + '?t=' + Date.now();
+    }
+
+    document.getElementById('lightbox').addEventListener('click', (e) => {
+      if (e.target.id === 'lightbox') closeLightbox();
+    });
+
+    // ── Auto-refresh grid images every 2 min ──
+    function refreshGridImages() {
+      const bust = Date.now();
+      document.querySelectorAll('.cam-tile img').forEach(img => {
+        const base = img.src.split('?')[0];
+        img.src = base + '?t=' + bust;
+      });
+    }
+
+    // ── Mini Map ──
+    const minimap = L.map('minimap', {
+      zoomControl: false,
+      attributionControl: false,
+      dragging: false,
+      scrollWheelZoom: false,
+      doubleClickZoom: false,
+      touchZoom: false,
+    }).setView([55.55, -4.5], 9);
+
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+      maxZoom: 16,
+    }).addTo(minimap);
+
+    let minimapMarkers = L.layerGroup().addTo(minimap);
+
+    function updateMinimap() {
+      minimapMarkers.clearLayers();
+      if (filteredSensors.length === 0) return;
+
+      const bounds = [];
+      filteredSensors.forEach(s => {
+        const color = s.status === 'live' ? '#22c55e' : s.status === 'stale' ? '#f59e0b' : '#ef4444';
+        const marker = L.circleMarker([s.lat, s.lon], {
+          radius: 4,
+          fillColor: color,
+          color: color,
+          weight: 1,
+          opacity: 0.9,
+          fillOpacity: 0.8,
+        });
+        marker.bindTooltip(s.name, { direction: 'top', offset: [0, -6] });
+        minimapMarkers.addLayer(marker);
+        bounds.push([s.lat, s.lon]);
+      });
+
+      if (bounds.length > 1) {
+        minimap.fitBounds(bounds, { padding: [15, 15], maxZoom: 13 });
+      } else if (bounds.length === 1) {
+        minimap.setView(bounds[0], 12);
+      }
+    }
+
+    // Hook minimap update into applyFilters
+    const _origApplyFilters = applyFilters;
+    applyFilters = function() {
+      _origApplyFilters();
+      updateMinimap();
+    };
+
+    // ── Init ──
+    fetchSensors();
+    setInterval(fetchSensors, 60000);
+    setInterval(refreshGridImages, 120000);
+  </script>
+</body>
+</html>

@@ -743,7 +743,6 @@
       box-shadow: 0 0 8px 3px rgba(239,68,68,.8), 0 0 18px 8px rgba(239,68,68,.4) !important;
     }
   </style>
-    <script src="https://analytics.wispayr.online/beacon.js" data-site="ayrshire-traffic" async></script>
 </head>
 <body>
 

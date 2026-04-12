@@ -743,7 +743,6 @@
       box-shadow: 0 0 8px 3px rgba(239,68,68,.8), 0 0 18px 8px rgba(239,68,68,.4) !important;
     }
   </style>
-    <script src="https://analytics.wispayr.online/beacon.js" data-site="ayrshire-traffic" async></script>
 </head>
 <body>
 
@@ -775,31 +774,6 @@
       <div class="pill green" id="congestion-pill">
         <span class="count" id="count-congestion">–</span>
         <span>Congestion</span>
-      </div>
-      <div class="pill" id="vision-weather-pill" style="display:none;gap:5px">
-        <span id="vision-weather-icon"></span>
-        <span id="vision-weather-label"></span>
-      </div>
-      <div class="pill amber" id="vision-frozen-pill" style="display:none;gap:5px">
-        <span class="count" id="vision-frozen-count"></span>
-        <span>❄️ Frozen</span>
-      </div>
-      <div class="pill red" id="vision-broken-pill" style="display:none;gap:5px">
-        <span class="count" id="vision-broken-count"></span>
-        <span>⛔ Broken</span>
-      </div>
-      <div class="pill blue" id="vision-rain-pill" style="display:none;gap:5px">
-        <span class="count" id="vision-rain-count"></span>
-        <span>🌧️ Rain</span>
-      </div>
-      <div class="pill red" id="vision-incidents-pill" style="display:none;gap:5px">
-        <span>\u26A0</span>
-        <span id="vision-incidents-count">0</span>
-        <span>incidents</span>
-      </div>
-      <div class="pill green" id="vision-vehicles-pill" style="display:none;gap:5px">
-        <span class="count" id="vision-vehicles-count"></span>
-        <span>🚘 Vehicles</span>
       </div>
     </div>
     <div id="last-updated">–</div>
@@ -1096,13 +1070,6 @@ const VMS_STOCK_PATTERNS = [
   'DONT ADJUST',
   'DRINK AND DRIVE',
   'MOBILE PHONE',
-  'FRUSTRATION',
-  'CAUSE ACCIDENTS',
-  'DRIVE TO ROAD CONDITIONS',
-  'KEEP YOUR DISTANCE',
-  'STAY ALERT',
-  'TAKE A BREAK',
-  'THINK BIKE',
 ];
 
 function isVmsCaution(msg) {
@@ -1253,58 +1220,8 @@ function buildPopup(item) {
          </div>`
       : '';
     const imgUrl = item.camera_url + '?t=' + Math.floor(Date.now() / 60000);
-    // Vision analysis overlay
-    const vc = (typeof visionCameras !== 'undefined') ? visionCameras[item.sensor_id] : null;
-    let visionHtml = '';
-    if (vc) {
-      const act = vc.activity || {};
-      const bri = vc.brightness || {};
-      const wth = vc.weather || {};
-      const actLevel = act.activity_level || 'unknown';
-      const actColors = {frozen:'#ef4444',static:'#6b7280',light:'#22c55e',moderate:'#f59e0b',heavy:'#ef4444'};
-      const actColor = actColors[actLevel] || '#6b7280';
-      const frozen = actLevel === 'frozen';
-      const weatherLabel = wth.weather ? (wth.weather.charAt(0).toUpperCase() + wth.weather.slice(1)) : '';
-      const fogPct = bri.fog_likelihood || 0;
-      const rain = vc.rain || {};
-      const brk = vc.broken || {};
-      const rt = vc.road_type || {};
-      const isBroken = brk.broken === true;
-      const rainDetected = rain.rain_detected === true;
-      const rtLabels = { motorway: '🛣️ Motorway', dual_carriageway: '🛤️ Dual', single_carriageway: 'Single', complex: '🔀 Complex' };
-      const rtColors = { motorway: '#f87171', dual_carriageway: '#fbbf24', single_carriageway: '#4ade80', complex: '#c084fc' };
-      visionHtml = `<div style="display:flex;gap:6px;flex-wrap:wrap;margin:4px 0 6px;font-size:11px">
-        ${rt.road_type && rt.road_type !== 'unknown' ? '<span style="background:rgba(255,255,255,.08);padding:2px 6px;border-radius:4px;color:' + (rtColors[rt.road_type]||'#94a3b8') + ';font-weight:600">' + (rtLabels[rt.road_type]||rt.road_type) + ' · ' + rt.lane_estimate + ' lanes</span>' : ''}
-        ${isBroken ? '<span style="background:#7f1d1d;color:#fca5a5;padding:2px 6px;border-radius:4px;font-weight:600">⛔ BROKEN — ' + (brk.reason || '').replace('_',' ') + '</span>' : ''}
-        ${frozen ? '<span style="background:#7f1d1d;color:#fca5a5;padding:2px 6px;border-radius:4px;font-weight:600">⚠️ FROZEN</span>' : ''}
-        ${rainDetected ? '<span style="background:rgba(59,130,246,.15);color:#60a5fa;padding:2px 6px;border-radius:4px;font-weight:600">🌧️ ' + rain.lens_condition.replace('rain_','') + ' (score: ' + rain.rain_score + ')</span>' : ''}
-        <span style="background:rgba(255,255,255,.08);padding:2px 6px;border-radius:4px"><span style="color:${actColor};font-weight:600">${actLevel}</span> activity</span>
-        ${weatherLabel ? '<span style="background:rgba(255,255,255,.08);padding:2px 6px;border-radius:4px">' + (typeof WEATHER_ICONS !== 'undefined' ? (WEATHER_ICONS[wth.weather] || '') : '') + ' ' + weatherLabel + '</span>' : ''}
-        <span style="background:rgba(255,255,255,.08);padding:2px 6px;border-radius:4px">💡 ${Math.round(bri.mean_brightness || 0)}</span>
-        ${fogPct > 30 ? '<span style="background:#7f1d1d;color:#fca5a5;padding:2px 6px;border-radius:4px">🌫️ Fog ' + fogPct + '%</span>' : ''}
-        ${(() => { const vh = vc.vehicles || {}; if (vh.total_vehicles > 0) { const vclr = vh.total_vehicles > 8 ? '#f87171' : vh.total_vehicles > 3 ? '#fbbf24' : '#4ade80'; return '<span style="background:rgba(255,255,255,.08);padding:2px 6px;border-radius:4px;color:' + vclr + ';font-weight:600">' + vh.total_vehicles + ' vehicles (' + vh.density + ')</span>'; } return ''; })()}
-      </div>`;
-      // Add incidents
-      const mapIncs = (typeof incidentData !== 'undefined') ? incidentData[item.sensor_id] : null;
-      if (mapIncs && mapIncs.length > 0) {
-        const incIcons = {potential_collision:'\u{1F4A5}',possible_queue:'\u{1F6A6}',hard_shoulder_use:'\u26A0',pedestrian_on_carriageway:'\u{1F6B6}',workers_on_road:'\u{1F477}'};
-        visionHtml += '<div style="display:flex;gap:4px;flex-wrap:wrap;margin:2px 0 4px;font-size:11px">' +
-          mapIncs.map(i => {
-            const sclr = i.severity === 'critical' ? '#f87171' : i.severity === 'warning' ? '#fbbf24' : '#60a5fa';
-            const bg = i.severity === 'critical' ? 'rgba(239,68,68,.15)' : i.severity === 'warning' ? 'rgba(245,158,11,.12)' : 'rgba(59,130,246,.1)';
-            const ico = incIcons[i.type] || '\u26A0';
-            return '<span style="background:' + bg + ';color:' + sclr + ';padding:2px 6px;border-radius:4px;font-weight:600">' + ico + ' ' + i.message + '</span>';
-          }).join('') + '</div>';
-      }
-      // Add scene description
-      const mapDesc = (typeof sceneDescriptions !== 'undefined') ? sceneDescriptions[item.sensor_id] : null;
-      if (mapDesc && !mapDesc.startsWith('The user')) {
-        visionHtml += '<div style="margin:4px 0;padding:6px 8px;background:rgba(59,130,246,.06);border:1px solid rgba(59,130,246,.12);border-radius:6px;font-size:11px;color:#94a3b8;line-height:1.4"><span style="color:#3b82f6;font-weight:700;font-size:10px">AI </span>' + mapDesc + '</div>';
-      }
-    }
     extra = `<div style="margin:8px 0">
       ${sensorLine}
-      ${visionHtml}
       <img src="${imgUrl}" style="width:100%;border-radius:6px;border:1px solid rgba(255,255,255,.15);box-shadow:0 2px 8px rgba(0,0,0,.3)" onerror="this.style.display='none'" loading="lazy">
       ${item.source === 'Traffic Scotland FTP' ? '<div style="font-size:10px;opacity:.5;margin-top:4px;text-align:right">📡 FTP Sensor Feed</div>' : ''}
     </div>`;
@@ -1709,148 +1626,6 @@ if (window.innerWidth <= 768) {
 // ── Init ─────────────────────────────────────────────────────────────────────
 fetchTraffic();
 setInterval(fetchTraffic, REFRESH_INTERVAL);
-
-// ── Vision Analysis Integration ───────────────────────────────────────────────
-let visionData = null;
-let visionCameras = {};
-let heatmapData = {};
-let incidentData = {}, sceneDescriptions = {};
-
-const WEATHER_ICONS = {
-  'clear': '☀️', 'sunny': '☀️',
-  'overcast': '☁️', 'cloudy': '☁️',
-  'rain': '🌧️', 'rainy': '🌧️',
-  'mixed': '🌤️',
-  'fog': '🌫️', 'foggy': '🌫️',
-  'snow': '🌨️', 'snowy': '🌨️',
-  'night': '🌙',
-};
-
-async function fetchVision() {
-  try {
-    const [summaryResp, fullResp] = await Promise.all([
-      fetch(API_BASE + '/api/vision/summary'),
-      fetch(API_BASE + '/api/vision'),
-    ]);
-    if (summaryResp.ok) {
-      visionData = await summaryResp.json();
-      updateVisionStatus(visionData);
-    }
-    if (fullResp.ok) {
-      const full = await fullResp.json();
-      visionCameras = full.cameras || {};
-    }
-    // Fetch heatmap data for marker colouring
-    try {
-      const heatResp = await fetch('/api/vision/heatmap');
-      if (heatResp.ok) heatmapData = await heatResp.json();
-    } catch(e) {}
-    // Fetch incidents and scene descriptions
-    try {
-      const incResp = await fetch('/api/vision/incidents');
-      if (incResp.ok) {
-        const incJ = await incResp.json();
-        incidentData = incJ.incidents || {};
-        sceneDescriptions = incJ.descriptions || {};
-      }
-    } catch(e) {}
-    updateCameraHeatmap();
-    updateIncidentPill();
-  } catch (e) {
-    console.warn('Vision fetch failed:', e);
-  }
-}
-
-function updateVisionStatus(v) {
-  // Weather pill
-  const wp = document.getElementById('vision-weather-pill');
-  const wi = document.getElementById('vision-weather-icon');
-  const wl = document.getElementById('vision-weather-label');
-  if (v.dominant_weather) {
-    const w = v.dominant_weather.toLowerCase();
-    wi.textContent = WEATHER_ICONS[w] || '🌡️';
-    wl.textContent = v.dominant_weather.charAt(0).toUpperCase() + v.dominant_weather.slice(1);
-    // Color based on weather
-    wp.className = 'pill ' + (w.includes('rain') || w.includes('snow') ? 'amber' : w.includes('fog') ? 'red' : 'blue');
-    wp.style.display = '';
-  }
-
-  // Frozen cameras pill
-  const fp = document.getElementById('vision-frozen-pill');
-  const fc = document.getElementById('vision-frozen-count');
-
-  // Broken cameras
-  const bp = document.getElementById('vision-broken-pill');
-  const bc = document.getElementById('vision-broken-count');
-  const brokenCount = v.broken_cameras || 0;
-  if (bp) {
-    bp.style.display = brokenCount > 0 ? 'flex' : 'none';
-    if (bc) bc.textContent = brokenCount;
-  }
-
-  // Rain on lens
-  const rp = document.getElementById('vision-rain-pill');
-  const rc = document.getElementById('vision-rain-count');
-  const rainCount = v.rain_detected_cameras || 0;
-  if (rp) {
-    rp.style.display = rainCount > 0 ? 'flex' : 'none';
-    if (rc) rc.textContent = rainCount;
-  }
-  if (v.frozen_cameras > 0) {
-    fc.textContent = v.frozen_cameras;
-    fp.style.display = '';
-  } else {
-    fp.style.display = 'none';
-  }
-
-  // Vehicle count pill
-  const vhp = document.getElementById('vision-vehicles-pill');
-  const vhc = document.getElementById('vision-vehicles-count');
-  const vehicleCount = v.total_vehicles || 0;
-  if (vhp) {
-    vhp.style.display = vehicleCount > 0 ? '' : 'none';
-    if (vhc) vhc.textContent = vehicleCount;
-  }
-}
-
-function updateIncidentPill() {
-  const totalIncs = Object.values(incidentData).reduce((s, a) => s + (a ? a.length : 0), 0);
-  const pill = document.getElementById('vision-incidents-pill');
-  const count = document.getElementById('vision-incidents-count');
-  if (pill && count) {
-    pill.style.display = totalIncs > 0 ? '' : 'none';
-    count.textContent = totalIncs;
-  }
-}
-
-function updateCameraHeatmap() {
-  // Colour camera markers by traffic density
-  if (!heatmapData || Object.keys(heatmapData).length === 0) return;
-  document.querySelectorAll('.leaflet-marker-icon').forEach(el => {
-    // Camera markers have a data-sensor-id or we match by popup content
-    // Instead, update via the marker layer
-  });
-  // Update via the camera markers in the layers
-  if (typeof cameraMarkers !== 'undefined') {
-    Object.entries(cameraMarkers).forEach(([sid, marker]) => {
-      const h = heatmapData[sid];
-      if (!h) return;
-      const density = h.density || 'unknown';
-      const colors = {empty:'#6b7280',light:'#22c55e',moderate:'#f59e0b',heavy:'#f97316',congested:'#ef4444'};
-      const color = colors[density] || '#6b7280';
-      const el = marker.getElement ? marker.getElement() : marker._icon;
-      if (el) {
-        el.style.filter = density === 'congested' ? 'hue-rotate(0deg) brightness(1.2)' : '';
-        el.style.boxShadow = h.total_vehicles > 0 ? '0 0 ' + Math.min(h.total_vehicles, 20) + 'px ' + color : '';
-        el.style.borderRadius = '50%';
-      }
-    });
-  }
-}
-
-fetchVision();
-setInterval(fetchVision, 120000); // refresh every 2 minutes
-
 
 // Sync toggle UI with activeLayers on load
 document.querySelectorAll('.layer-toggle').forEach(el => {

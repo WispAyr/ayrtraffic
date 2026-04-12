@@ -41,7 +41,6 @@ AYRSHIRE_BBOX = {
 }
 NURO_HUB = "http://10.200.0.8:3960"
 SERVICE_ID = "ayrtraffic"
-SIPHON_URL = "http://142.202.191.208:3882"
 # ─── DATEX II Config (Traffic Scotland) ──────────────────────────────────────
 
 DATEX2_CLIENT_ID = "14d2c05d-696d-45be-8ddc-2b20105de3c7"
@@ -169,264 +168,10 @@ def severity_from_text(text: str) -> str:
     return "green"
 
 
-
-
-# ─── Siphon-First Data Fetchers ──────────────────────────────────────────────
-# Pattern: Try Siphon (fast cached REST) first, fall back to legacy direct API calls
-
-def _siphon_severity_to_frontend(severity: str) -> str:
-    """Map Siphon severity strings to frontend color codes."""
-    mapping = {
-        "highest": "red",
-        "high": "red",
-        "medium": "amber",
-        "low": "green",
-        "lowest": "green",
-        "unknown": "amber",
-    }
-    return mapping.get((severity or "").lower(), "amber")
-
+# ─── Data Fetchers ────────────────────────────────────────────────────────────
 
 async def fetch_tsis_incidents() -> list:
-    """Fetch incidents: Siphon PRIMARY, legacy TSIS fallback."""
-    data = await siphon_get("/api/traffic/datex2/incidents")
-    if data and data.get("incidents"):
-        results = []
-        for inc in data["incidents"]:
-            lat = inc.get("lat")
-            lon = inc.get("lon")
-            if not lat or not lon:
-                continue
-            if not in_ayrshire(float(lat), float(lon)):
-                continue
-            title = inc.get("title") or "Incident"
-            if inc.get("road"):
-                title = f"{inc['road']}: {title}"
-            if inc.get("location_name"):
-                title += f" ({inc['location_name']})"
-            desc_parts = []
-            if inc.get("description"):
-                desc_parts.append(inc["description"])
-            if inc.get("validity_start"):
-                desc_parts.append(f"Since: {inc['validity_start']}")
-            if inc.get("validity_end"):
-                desc_parts.append(f"Until: {inc['validity_end']}")
-            results.append({
-                "id": f"siphon-inc-{inc.get('id', '')}",
-                "type": "incidents",
-                "title": title[:200],
-                "description": " | ".join(desc_parts)[:500],
-                "lat": float(lat),
-                "lon": float(lon),
-                "severity": _siphon_severity_to_frontend(inc.get("severity", "")),
-                "source": "DATEX II (Siphon)",
-                "url": "https://www.traffic.gov.scot/",
-                "pub_date": inc.get("validity_start", ""),
-                "active": True,
-                "datex_type": inc.get("datex_type", ""),
-            })
-        log.info(f"Siphon incidents: {len(results)} Ayrshire items (from {data.get('count', '?')} total)")
-        return results
-    # Fallback to legacy
-    log.info("Siphon incidents unavailable, falling back to legacy TSIS")
-    return await _legacy_fetch_tsis_incidents()
-
-
-async def fetch_tsis_roadworks() -> list:
-    """Fetch roadworks: Siphon PRIMARY, legacy TSIS fallback."""
-    data = await siphon_get("/api/traffic/datex2/roadworks")
-    if data and data.get("roadworks"):
-        results = []
-        for rw in data["roadworks"]:
-            lat = rw.get("lat")
-            lon = rw.get("lon")
-            if not lat or not lon:
-                continue
-            if not in_ayrshire(float(lat), float(lon)):
-                continue
-            title = "Roadworks"
-            if rw.get("road"):
-                title = f"{rw['road']} Roadworks"
-            if rw.get("location_name"):
-                title += f" ({rw['location_name']})"
-            if rw.get("planned"):
-                title = f"Planned: {title}"
-            desc_parts = []
-            if rw.get("description"):
-                desc_parts.append(rw["description"])
-            if rw.get("validity_start"):
-                desc_parts.append(f"From: {rw['validity_start']}")
-            if rw.get("validity_end"):
-                desc_parts.append(f"Until: {rw['validity_end']}")
-            results.append({
-                "id": f"siphon-rw-{rw.get('id', '')}",
-                "type": "roadworks",
-                "title": title[:200],
-                "description": " | ".join(desc_parts)[:500],
-                "lat": float(lat),
-                "lon": float(lon),
-                "severity": _siphon_severity_to_frontend(rw.get("severity", "medium")),
-                "source": "DATEX II (Siphon)",
-                "url": "https://www.traffic.gov.scot/",
-                "pub_date": rw.get("validity_start", ""),
-                "active": not rw.get("planned", False),
-                "planned": rw.get("planned", False),
-            })
-        log.info(f"Siphon roadworks: {len(results)} Ayrshire items (from {data.get('count', '?')} total)")
-        return results
-    # Fallback to legacy
-    log.info("Siphon roadworks unavailable, falling back to legacy TSIS")
-    return await _legacy_fetch_tsis_roadworks()
-
-
-async def fetch_datex2_events() -> list:
-    """Fetch DATEX2 incidents: Siphon PRIMARY, legacy DATEX2 XML fallback."""
-    data = await siphon_get("/api/traffic/datex2/incidents")
-    if data and data.get("incidents"):
-        results = []
-        for inc in data["incidents"]:
-            lat = inc.get("lat")
-            lon = inc.get("lon")
-            if not lat or not lon:
-                continue
-            # Wider Ayrshire bbox for DATEX2
-            if not (55.15 <= float(lat) <= 55.85 and -5.1 <= float(lon) <= -4.0):
-                continue
-            title = inc.get("title") or inc.get("datex_type") or "Incident"
-            if inc.get("road"):
-                title = f"{inc['road']}: {title}"
-            if inc.get("location_name"):
-                title += f" ({inc['location_name']})"
-            desc_parts = []
-            if inc.get("description"):
-                desc_parts.append(inc["description"])
-            if inc.get("validity_start"):
-                desc_parts.append(f"Since: {inc['validity_start']}")
-            if inc.get("validity_end"):
-                desc_parts.append(f"Until: {inc['validity_end']}")
-            results.append({
-                "id": f"datex-event-{inc.get('id', '')}",
-                "type": "incidents",
-                "title": title[:200],
-                "description": " | ".join(desc_parts)[:500],
-                "lat": float(lat),
-                "lon": float(lon),
-                "severity": _siphon_severity_to_frontend(inc.get("severity", "")),
-                "source": "DATEX II",
-                "url": "https://www.traffic.gov.scot/",
-                "pub_date": inc.get("validity_start", ""),
-                "active": True,
-                "datex_type": inc.get("datex_type", ""),
-                "datex_id": inc.get("id", ""),
-            })
-        log.info(f"Siphon DATEX2 events: {len(results)} Ayrshire items")
-        return results
-    log.info("Siphon DATEX2 events unavailable, falling back to legacy XML parsing")
-    return await _legacy_fetch_datex2_events()
-
-
-async def fetch_datex2_roadworks() -> list:
-    """Fetch DATEX2 roadworks: Siphon PRIMARY, legacy DATEX2 XML fallback."""
-    data = await siphon_get("/api/traffic/datex2/roadworks")
-    if data and data.get("roadworks"):
-        results = []
-        for rw in data["roadworks"]:
-            lat = rw.get("lat")
-            lon = rw.get("lon")
-            if not lat or not lon:
-                continue
-            if not (55.15 <= float(lat) <= 55.85 and -5.1 <= float(lon) <= -4.0):
-                continue
-            is_planned = rw.get("planned", False)
-            prefix = "Planned: " if is_planned else ""
-            title = f"{prefix}Roadworks"
-            if rw.get("road"):
-                title = f"{prefix}{rw['road']} Roadworks"
-            if rw.get("location_name"):
-                title += f" ({rw['location_name']})"
-            desc_parts = []
-            if rw.get("description"):
-                desc_parts.append(rw["description"])
-            if rw.get("validity_start"):
-                desc_parts.append(f"From: {rw['validity_start']}")
-            if rw.get("validity_end"):
-                desc_parts.append(f"Until: {rw['validity_end']}")
-            results.append({
-                "id": f"datex-rw-{rw.get('id', '')}",
-                "type": "roadworks",
-                "title": title[:200],
-                "description": " | ".join(desc_parts)[:500],
-                "lat": float(lat),
-                "lon": float(lon),
-                "severity": _siphon_severity_to_frontend(rw.get("severity", "medium")),
-                "source": "DATEX II",
-                "url": "https://www.traffic.gov.scot/",
-                "pub_date": rw.get("validity_start", ""),
-                "active": not is_planned,
-                "datex_type": rw.get("datex_type", ""),
-                "datex_id": rw.get("id", ""),
-                "planned": is_planned,
-            })
-        log.info(f"Siphon DATEX2 roadworks: {len(results)} Ayrshire items")
-        return results
-    log.info("Siphon DATEX2 roadworks unavailable, falling back to legacy XML parsing")
-    return await _legacy_fetch_datex2_roadworks()
-
-
-async def fetch_traffic_cameras() -> list:
-    """Fetch cameras: Siphon PRIMARY, legacy FTP/web fallback."""
-    data = await siphon_get("/api/traffic/cameras")
-    if data and data.get("cameras"):
-        results = []
-        now_iso = datetime.now(timezone.utc).isoformat()
-        for cam in data["cameras"]:
-            lat = cam.get("lat")
-            lon = cam.get("lon")
-            if not lat or not lon:
-                continue
-            # Wider Ayrshire filter for cameras
-            if not (55.1 <= float(lat) <= 55.9 and -5.1 <= float(lon) <= -4.1):
-                continue
-            cam_id = cam.get("id", "")
-            image_url = cam.get("image_url", "")
-            # Check if we have a local FTP copy for this camera
-            sensor_id = cam_id.replace(".", "_").replace(".jpg", "")
-            local_sensor = _ftp_sensors.get(sensor_id)
-            local_health = _ftp_sensor_health.get(sensor_id, {})
-            local_img = FTP_CAMERA_DIR / f"{cam_id}.jpg" if cam_id else None
-            has_local = local_img and local_img.exists() and local_img.stat().st_size > 500 if local_img else False
-            # Prefer local FTP image if available
-            if has_local:
-                display_url = f"/api/cameras/image/{cam_id}.jpg"
-            elif image_url:
-                display_url = image_url
-            else:
-                display_url = ""
-            results.append({
-                "id": f"sensor-cam-{cam_id}",
-                "type": "camera",
-                "title": cam.get("name") or cam.get("description") or "CCTV Camera",
-                "description": cam.get("description") or "Traffic Scotland CCTV",
-                "lat": float(lat),
-                "lon": float(lon),
-                "severity": "blue",
-                "source": "Traffic Scotland (Siphon)",
-                "url": display_url,
-                "pub_date": now_iso,
-                "active": True,
-                "camera_url": display_url,
-            })
-        log.info(f"Siphon cameras: {len(results)} Ayrshire cameras (from {data.get('count', '?')} total)")
-        return results
-    # Fallback to legacy FTP/web
-    log.info("Siphon cameras unavailable, falling back to legacy FTP/web")
-    return await _legacy_fetch_traffic_cameras()
-
-
-# ─── Data Fetchers (Legacy Fallbacks) ─────────────────────────────────────────
-
-async def _legacy_fetch_tsis_incidents() -> list:
-    """[LEGACY FALLBACK] Fetch live incidents from Traffic Scotland TSIS JSON API."""
+    """Fetch live incidents from Traffic Scotland TSIS JSON API."""
     url = "https://www.traffic.gov.scot/tsis/incidents"
     results = []
     async with httpx.AsyncClient(timeout=20, follow_redirects=True) as client:
@@ -488,8 +233,8 @@ async def _legacy_fetch_tsis_incidents() -> list:
     return results
 
 
-async def _legacy_fetch_tsis_roadworks() -> list:
-    """[LEGACY FALLBACK] Fetch roadworks from Traffic Scotland TSIS JSON API."""
+async def fetch_tsis_roadworks() -> list:
+    """Fetch roadworks from Traffic Scotland TSIS JSON API."""
     url = "https://www.traffic.gov.scot/tsis/roadworks"
     results = []
     async with httpx.AsyncClient(timeout=20, follow_redirects=True) as client:
@@ -1205,8 +950,8 @@ async def ftp_camera_refresh_loop():
         await asyncio.sleep(60)  # Check every minute, only fetch when interval passed
 
 
-async def _legacy_fetch_traffic_cameras() -> list:
-    """[LEGACY FALLBACK] Return camera list from FTP sensor registry (falls back to web API on first boot)."""
+async def fetch_traffic_cameras() -> list:
+    """Return camera list from FTP sensor registry (falls back to web API on first boot)."""
     if _ftp_sensors:
         results = []
         now_iso = datetime.now(timezone.utc).isoformat()
@@ -1604,8 +1349,8 @@ async def fetch_datex2_xml(publication: str) -> Optional[ET.Element]:
     return None
 
 
-async def _legacy_fetch_datex2_events() -> list:
-    """[LEGACY FALLBACK] Fetch unplanned events (accidents, breakdowns, etc.) from DATEX II."""
+async def fetch_datex2_events() -> list:
+    """Fetch unplanned events (accidents, breakdowns, etc.) from DATEX II."""
     root = await fetch_datex2_xml("UnplannedEvents")
     if root is None:
         return []
@@ -1721,8 +1466,8 @@ async def _legacy_fetch_datex2_events() -> list:
     return results
 
 
-async def _legacy_fetch_datex2_roadworks() -> list:
-    """[LEGACY FALLBACK] Fetch current and future roadworks from DATEX II."""
+async def fetch_datex2_roadworks() -> list:
+    """Fetch current and future roadworks from DATEX II."""
     results = []
 
     for pub_name in ("CurrentRoadworks", "FutureRoadworks"):
@@ -2521,81 +2266,6 @@ async def camera_sensors():
     })
 
 
-
-# ─── Vision Analysis Proxy ────────────────────────────────────────────────────
-
-VISION_SERVICE = "http://localhost:3878"
-
-@app.get("/api/vision")
-async def vision_proxy():
-    """Proxy full vision analysis from camera-vision service."""
-    try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            resp = await client.get(f"{VISION_SERVICE}/api/analysis")
-            return JSONResponse(resp.json(), status_code=resp.status_code)
-    except Exception as e:
-        log.warning(f"Vision service unavailable: {e}")
-        return JSONResponse({"error": "Vision service unavailable"}, status_code=503)
-
-
-@app.get("/api/vision/summary")
-async def vision_summary_proxy():
-    """Proxy vision summary from camera-vision service."""
-    try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            resp = await client.get(f"{VISION_SERVICE}/api/analysis/summary")
-            return JSONResponse(resp.json(), status_code=resp.status_code)
-    except Exception as e:
-        log.warning(f"Vision service unavailable: {e}")
-        return JSONResponse({"error": "Vision service unavailable"}, status_code=503)
-
-
-
-
-@app.get("/api/vision/alerts")
-async def vision_alerts_proxy():
-    """Proxy vision alerts from camera-vision service."""
-    try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            resp = await client.get(f"{VISION_SERVICE}/api/analysis/alerts")
-            return JSONResponse(resp.json(), status_code=resp.status_code)
-    except Exception as e:
-        log.warning(f"Vision service unavailable: {e}")
-        return JSONResponse({"error": "Vision service unavailable", "alerts": []}, status_code=503)
-
-@app.get("/api/vision/heatmap")
-async def vision_heatmap_proxy():
-    """Proxy heatmap data from camera-vision service."""
-    try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            resp = await client.get(f"{VISION_SERVICE}/api/analysis/heatmap")
-            return JSONResponse(resp.json(), status_code=resp.status_code)
-    except Exception as e:
-        return JSONResponse({}, status_code=503)
-
-
-@app.get("/api/vision/incidents")
-async def vision_incidents_proxy():
-    """Proxy incident data from camera-vision service."""
-    try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            resp = await client.get(f"{VISION_SERVICE}/api/analysis/incidents")
-            return JSONResponse(resp.json(), status_code=resp.status_code)
-    except Exception as e:
-        return JSONResponse({"incidents": {}, "descriptions": {}}, status_code=503)
-
-
-@app.get("/api/vision/history/{sensor_id}")
-async def vision_history_proxy(sensor_id: str, hours: int = 24):
-    """Proxy historical traffic data from camera-vision service."""
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.get(f"{VISION_SERVICE}/api/analysis/history/{sensor_id}?hours={hours}")
-            return JSONResponse(resp.json(), status_code=resp.status_code)
-    except Exception as e:
-        return JSONResponse({"error": str(e)}, status_code=503)
-
-
 @app.post("/api/refresh")
 async def force_refresh():
     """Force a data refresh."""
@@ -2629,34 +2299,6 @@ async def serve_cctv():
 
 
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
-
-
-# -- Siphon Integration -------------------------------------------------------
-
-async def siphon_get(path: str) -> dict | None:
-    """Fetch from Siphon cache service (PRIMARY data source). Returns None on any failure."""
-    try:
-        async with httpx.AsyncClient(timeout=8.0) as client:
-            resp = await client.get(f"{SIPHON_URL}{path}")
-            resp.raise_for_status()
-            return resp.json()
-    except Exception as e:
-        log.warning(f"Siphon fetch failed for {path}: {e}")
-        return None
-
-
-@app.get("/api/siphon-incidents")
-async def siphon_incidents():
-    """Transport Scotland incidents and roadworks via Siphon (supplementary/fallback)."""
-    incidents = await siphon_get("/api/transport/incidents")
-    roadworks = await siphon_get("/api/transport/roadworks")
-    if incidents is None and roadworks is None:
-        raise HTTPException(status_code=502, detail="Siphon transport data unavailable")
-    return JSONResponse({
-        "incidents": incidents if incidents is not None else [],
-        "roadworks": roadworks if roadworks is not None else [],
-        "source": "siphon",
-    })
 
 
 if __name__ == "__main__":
