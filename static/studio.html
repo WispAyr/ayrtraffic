@@ -1098,6 +1098,51 @@
     /* Trunk cards become clickable */
     .trunk-card { cursor: pointer; }
 
+    /* Road panel — mini-map at top of body */
+    .rp-mini-toggle {
+      width: 100%;
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 9px 14px; margin-bottom: 14px;
+      background: var(--card-3); border: 1px solid var(--line);
+      border-radius: 5px; cursor: pointer;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 10px; letter-spacing: 2.5px; text-transform: uppercase;
+      color: var(--fg-soft); font-weight: 600;
+      transition: border-color 0.15s, color 0.15s;
+    }
+    .rp-mini-toggle:hover { border-color: var(--accent); color: var(--accent); }
+    .rp-mini-toggle .arr { font-size: 13px; transition: transform 0.2s; }
+    .rp-mini-toggle.on .arr { transform: rotate(180deg); color: var(--accent); }
+    .rp-mini-wrap {
+      max-height: 0; overflow: hidden;
+      transition: max-height 0.32s cubic-bezier(0.2, 0.8, 0.2, 1);
+      margin-bottom: 0;
+    }
+    .rp-mini-wrap.on { max-height: 360px; margin-bottom: 16px; }
+    .rp-mini {
+      width: 100%; height: 280px;
+      background: var(--bg-soft);
+      border: 1px solid var(--line); border-radius: 6px;
+      overflow: hidden;
+    }
+    .rp-mini .leaflet-container { background: var(--bg); }
+    .rp-mini .leaflet-control-attribution { display: none; }
+    .rp-mini-meta {
+      display: flex; gap: 14px; padding: 6px 4px 0;
+      font-family: 'JetBrains Mono', monospace; font-size: 9px;
+      color: var(--muted); letter-spacing: 1.5px; text-transform: uppercase;
+    }
+    .rp-mini-meta .dot {
+      display: inline-flex; align-items: center; gap: 5px;
+    }
+    .rp-mini-meta .dot::before {
+      content: ''; width: 8px; height: 8px; border-radius: 50%;
+      background: currentColor; box-shadow: 0 0 6px currentColor;
+    }
+    .rp-mini-meta .dot.base  { color: var(--accent); }
+    .rp-mini-meta .dot.hot   { color: var(--bad); }
+    .rp-mini-meta .dot.event { color: var(--fg-soft); }
+
     /* Road focus mode — dim everything except the highlighted road */
     .leaflet-container.road-focus .leaflet-tile-pane     { filter: brightness(0.55) saturate(0.8); transition: filter 0.35s; }
     .leaflet-container.road-focus .leaflet-marker-pane,
@@ -1938,7 +1983,8 @@ async function openRoadPanel(code) {
     // Draw road highlight + apply focus dimming
     applyRoadFocus(code, d.geometry || [], d.status, d.hot_geometry || []);
 
-    body.innerHTML = renderRoadDetail(d);
+    body.innerHTML = renderMiniMapBlock(d) + renderRoadDetail(d);
+    wireMiniMap(d);
     body.querySelectorAll('[data-flyto]').forEach(node => {
       node.addEventListener('click', () => {
         const [lat, lon] = node.dataset.flyto.split(',').map(parseFloat);
@@ -1951,6 +1997,113 @@ async function openRoadPanel(code) {
   } catch (e) {
     body.innerHTML = '<div class="rp-empty">Could not load road detail</div>';
     console.error('[road]', e);
+  }
+}
+
+// Mini-map state — single Leaflet instance reused across road-panel opens
+let miniMap = null;
+let miniRoadLayer = null;
+let miniMarkerLayer = null;
+
+function renderMiniMapBlock(d) {
+  const segCount = (d.segments || []).length;
+  const incCount = (d.incidents || []).length + (d.roadworks || []).length + (d.tros || []).length;
+  const camCount = (d.cameras || []).length;
+  return `<button class="rp-mini-toggle" id="rp-mini-toggle">
+    <span>📍 Show on map · ${d.code}</span>
+    <span class="arr">▾</span>
+  </button>
+  <div class="rp-mini-wrap" id="rp-mini-wrap">
+    <div class="rp-mini" id="rp-mini"></div>
+    <div class="rp-mini-meta">
+      <span class="dot base">Road shape</span>
+      ${(d.hot_geometry || []).length ? '<span class="dot hot">Hot zone</span>' : ''}
+      <span class="dot event">${segCount} seg · ${incCount} events · ${camCount} cams</span>
+    </div>
+  </div>`;
+}
+
+function wireMiniMap(d) {
+  const toggle = document.getElementById('rp-mini-toggle');
+  const wrap = document.getElementById('rp-mini-wrap');
+  if (!toggle || !wrap) return;
+
+  toggle.addEventListener('click', () => {
+    const opening = !wrap.classList.contains('on');
+    wrap.classList.toggle('on', opening);
+    toggle.classList.toggle('on', opening);
+    if (opening) {
+      // Lazy-init on first reveal so we don't pay the cost when collapsed
+      requestAnimationFrame(() => paintMiniMap(d));
+    }
+  });
+}
+
+function paintMiniMap(d) {
+  const el = document.getElementById('rp-mini');
+  if (!el) return;
+
+  if (!miniMap) {
+    miniMap = L.map(el, {
+      zoomControl: true, attributionControl: false,
+      scrollWheelZoom: false, doubleClickZoom: true,
+    }).setView([55.55, -4.55], 9);
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+      maxZoom: 17,
+    }).addTo(miniMap);
+    miniRoadLayer = L.layerGroup().addTo(miniMap);
+    miniMarkerLayer = L.layerGroup().addTo(miniMap);
+  } else {
+    miniRoadLayer.clearLayers();
+    miniMarkerLayer.clearLayers();
+  }
+
+  const STATUS_COLOUR = { red: '#f87171', amber: '#fbbf24', green: '#34d399' };
+  const hotColour = STATUS_COLOUR[d.status] || '#ff5722';
+
+  // Base road shape
+  for (const line of (d.geometry || [])) {
+    if (!line || line.length < 2) continue;
+    L.polyline(line, {
+      color: '#ff5722', weight: 3, opacity: 0.6,
+      lineCap: 'round', lineJoin: 'round',
+      interactive: false,
+    }).addTo(miniRoadLayer);
+  }
+  // Hot zones
+  for (const line of (d.hot_geometry || [])) {
+    if (!line || line.length < 2) continue;
+    L.polyline(line, {
+      color: hotColour, weight: 12, opacity: 0.25,
+      lineCap: 'round', lineJoin: 'round', interactive: false,
+    }).addTo(miniRoadLayer);
+    L.polyline(line, {
+      color: hotColour, weight: 5, opacity: 0.95,
+      lineCap: 'round', lineJoin: 'round', interactive: false,
+    }).addTo(miniRoadLayer);
+  }
+
+  // Item markers — incidents, roadworks, tros, segments, cameras
+  const addMarker = (lat, lon, cls, popup) => {
+    if (lat == null || lon == null) return;
+    const m = L.marker([lat, lon], {
+      icon: L.divIcon({ className: '', html: `<div class="pin ${cls}"></div>`, iconSize: [10, 10], iconAnchor: [5, 5] }),
+    });
+    if (popup) m.bindPopup(popup, { maxWidth: 220 });
+    m.addTo(miniMarkerLayer);
+  };
+
+  for (const it of (d.incidents || [])) addMarker(it.lat, it.lon, 'red', `<strong>${escapeHtml(it.title || 'Incident')}</strong><br><small>${escapeHtml(it.summary || '')}</small>`);
+  for (const it of (d.roadworks || [])) addMarker(it.lat, it.lon, 'amber', `<strong>${escapeHtml(it.title || 'Roadworks')}</strong><br><small>${escapeHtml(it.summary || '')}</small>`);
+  for (const it of (d.tros || []))      addMarker(it.lat, it.lon, 'amber', `<strong>${escapeHtml(it.title || 'TRO')}</strong>`);
+  for (const c of (d.cameras || []))    addMarker(c.lat, c.lon, 'blue', `<strong>${escapeHtml(c.name || 'CCTV')}</strong><br><img src="${camUrl(c.url)}" style="width:200px;margin-top:4px;border:1px solid #1f1f24" alt="">`);
+
+  // Fit
+  if (d.bbox) {
+    try {
+      miniMap.invalidateSize();
+      miniMap.fitBounds([[d.bbox.south, d.bbox.west], [d.bbox.north, d.bbox.east]], { padding: [16, 16] });
+    } catch {}
   }
 }
 
