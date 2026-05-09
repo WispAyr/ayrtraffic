@@ -3,7 +3,7 @@ module.exports = {
     {
       name: 'ayrtraffic',
       script: '/opt/homebrew/bin/python3',
-      args: '-m uvicorn server:app --host 0.0.0.0 --port 3870 --workers 1',
+      args: '-m uvicorn server:app --host 127.0.0.1 --port 3870 --workers 1',
       cwd: '/Users/noc/operations/ayrtraffic',
       interpreter: 'none',
       env: {

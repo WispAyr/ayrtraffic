@@ -1,0 +1,2483 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Now Ayrshire Radio · Travel · Studio</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://unpkg.com/leaflet.heat@0.2.0/dist/leaflet-heat.js"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #0a0a0b;
+      --bg-soft: #0e0e10;
+      --fg: #f0f0f3;
+      --fg-soft: #b8b8be;
+      --muted: #6e6e76;
+      --muted-2: #4a4a52;
+      --line: #1f1f24;
+      --line-soft: rgba(255,255,255,0.06);
+      --accent: #ff5722;
+      --accent-soft: rgba(255,87,34,0.12);
+      --good: #34d399;
+      --warn: #fbbf24;
+      --bad: #f87171;
+      --bad-soft: rgba(248,113,113,0.10);
+      --bad-glow: rgba(248,113,113,0.45);
+      --warn-soft: rgba(251,191,36,0.08);
+      --card: #111114;
+      --card-2: #15151a;
+      --card-3: #1a1a20;
+    }
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0; padding: 0;
+      height: 100vh; width: 100vw;
+      background: var(--bg); color: var(--fg);
+      font-family: 'Inter', ui-sans-serif, system-ui, -apple-system, sans-serif;
+      font-feature-settings: "cv11", "ss01", "tnum";
+      overflow: hidden;
+      -webkit-font-smoothing: antialiased;
+    }
+    .mono {
+      font-family: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+      font-feature-settings: "zero", "ss01", "tnum";
+    }
+    .tnum { font-variant-numeric: tabular-nums; }
+
+    /* ─── Layout ──────────────────────────────────────────────────────── */
+    #root {
+      display: grid;
+      grid-template-rows: auto 76px 1fr 88px 148px;
+      grid-template-columns: 1fr 400px;
+      grid-template-areas:
+        "warn   warn"
+        "header header"
+        "map    side"
+        "trunk  trunk"
+        "cams   cams";
+      height: 100vh;
+    }
+    body.flash-red::after {
+      content: ''; position: fixed; inset: 0; pointer-events: none;
+      box-shadow: inset 0 0 0 6px var(--bad);
+      animation: redFlash 1.4s ease-out;
+      z-index: 9999;
+    }
+    @keyframes redFlash {
+      0%   { box-shadow: inset 0 0 0 0 transparent; opacity: 0; }
+      15%  { box-shadow: inset 0 0 0 8px var(--bad); opacity: 1; }
+      100% { box-shadow: inset 0 0 0 0 transparent; opacity: 0; }
+    }
+    header {
+      grid-area: header;
+      display: grid;
+      grid-template-columns: auto 1fr auto auto;
+      align-items: center;
+      padding: 0 24px 0 28px;
+      border-bottom: 1px solid var(--line);
+      background:
+        radial-gradient(circle at 0% 50%, rgba(255,87,34,0.04), transparent 30%),
+        linear-gradient(180deg, var(--card-2), var(--card));
+      gap: 24px;
+    }
+
+    /* ─── Met Office warning banner ──────────────────────────────────── */
+    #warning-bar {
+      grid-area: warn;
+      display: none; align-items: center; gap: 16px;
+      padding: 10px 24px;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 12px; letter-spacing: 1.5px; text-transform: uppercase;
+      border-bottom: 1px solid var(--line);
+      font-weight: 600;
+    }
+    #warning-bar.on { display: flex; }
+    #warning-bar.amber {
+      background: linear-gradient(90deg, rgba(251,191,36,0.18), rgba(251,191,36,0.06));
+      color: var(--warn);
+      border-color: rgba(251,191,36,0.35);
+    }
+    #warning-bar.red {
+      background: linear-gradient(90deg, rgba(248,113,113,0.18), rgba(248,113,113,0.06));
+      color: var(--bad);
+      border-color: rgba(248,113,113,0.35);
+    }
+    #warning-bar .icon {
+      font-size: 16px; letter-spacing: 0;
+      animation: livePulse 1.8s ease-in-out infinite;
+    }
+    #warning-bar .badge {
+      padding: 2px 8px; border-radius: 3px;
+      background: rgba(0,0,0,0.4);
+      letter-spacing: 2px; font-weight: 700;
+    }
+    #warning-bar .body { flex: 1; }
+
+    /* ─── Weather pill in header ─────────────────────────────────────── */
+    .weather-pill {
+      display: inline-flex; align-items: baseline; gap: 12px;
+      padding: 10px 14px; border-radius: 6px;
+      border: 1px solid var(--line);
+      background: var(--card-3);
+      cursor: pointer;
+      transition: border-color 0.15s;
+      position: relative;
+    }
+    .weather-pill:hover { border-color: rgba(255,255,255,0.15); }
+    .weather-pill .temp {
+      font-size: 22px; font-weight: 700; letter-spacing: -0.025em;
+      color: var(--fg);
+      font-variant-numeric: tabular-nums;
+    }
+    .weather-pill .meta {
+      display: flex; flex-direction: column; line-height: 1.05; gap: 3px;
+      font-size: 9.5px; letter-spacing: 1.8px; color: var(--muted);
+      text-transform: uppercase; font-weight: 500;
+    }
+    .weather-pill .meta .cond { color: var(--fg-soft); font-weight: 600; letter-spacing: 1.5px; }
+    .weather-pill.warn { border-color: rgba(251,191,36,0.35); }
+    .weather-pill.bad  { border-color: rgba(248,113,113,0.35); }
+    .weather-pill .wmo-icon {
+      font-size: 14px; letter-spacing: 0; align-self: center;
+    }
+
+    /* Weather expanded popover */
+    #weather-pop {
+      position: fixed; top: 76px; right: 24px;
+      background: var(--card-2);
+      border: 1px solid var(--line); border-radius: 6px;
+      padding: 14px 18px;
+      box-shadow: 0 12px 36px rgba(0,0,0,0.6);
+      z-index: 9000;
+      display: none; min-width: 280px;
+    }
+    #weather-pop.on { display: block; }
+    #weather-pop h5 {
+      margin: 0 0 10px; font-size: 9px; letter-spacing: 3px;
+      color: var(--accent); text-transform: uppercase; font-weight: 600;
+    }
+    #weather-pop dl {
+      margin: 0; display: grid; grid-template-columns: 110px 1fr;
+      gap: 4px 14px; font-size: 12px;
+    }
+    #weather-pop dt { color: var(--muted); font-size: 10px; letter-spacing: 1.5px; text-transform: uppercase; padding-top: 2px; }
+    #weather-pop dd { margin: 0; color: var(--fg); font-family: 'JetBrains Mono', monospace; font-variant-numeric: tabular-nums; }
+
+    /* ─── Header action toolbar (chime / calendar / search) ──────────── */
+    .header-actions {
+      display: flex; gap: 6px;
+    }
+    .header-actions button {
+      width: 38px; height: 38px; border-radius: 6px;
+      background: var(--card-3); border: 1px solid var(--line);
+      color: var(--fg-soft); cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 16px; line-height: 1;
+      transition: color 0.15s, border-color 0.15s, background 0.15s;
+    }
+    .header-actions button:hover {
+      color: var(--fg);
+      border-color: rgba(255,255,255,0.15);
+    }
+    .header-actions button.on {
+      color: var(--accent);
+      border-color: rgba(255,87,34,0.5);
+      background: rgba(255,87,34,0.08);
+    }
+    .header-actions button.muted { color: var(--muted-2); }
+    .header-actions .kbd {
+      font-family: 'JetBrains Mono', monospace; font-size: 9px; letter-spacing: 1px;
+      padding: 1px 5px; border-radius: 3px;
+      border: 1px solid var(--line);
+      color: var(--muted);
+      margin-left: 4px;
+    }
+
+    /* ─── Search modal (Cmd-K) ───────────────────────────────────────── */
+    #search-modal {
+      position: fixed; inset: 0;
+      background: rgba(10,10,11,0.85);
+      backdrop-filter: blur(10px);
+      z-index: 9500;
+      display: none; align-items: flex-start; justify-content: center;
+      padding-top: 12vh;
+    }
+    #search-modal.on { display: flex; }
+    #search-box {
+      width: 720px; max-width: 92vw;
+      background: var(--card-2);
+      border: 1px solid var(--line); border-radius: 10px;
+      box-shadow: 0 20px 80px rgba(0,0,0,0.7);
+      overflow: hidden;
+    }
+    #search-input {
+      width: 100%;
+      background: transparent; border: none; outline: none;
+      color: var(--fg);
+      font-size: 18px; font-weight: 500;
+      padding: 18px 22px;
+      border-bottom: 1px solid var(--line);
+      font-family: 'Inter', sans-serif;
+    }
+    #search-input::placeholder { color: var(--muted); }
+    #search-results {
+      max-height: 60vh; overflow-y: auto;
+      padding: 6px;
+    }
+    #search-results::-webkit-scrollbar { width: 5px; }
+    #search-results::-webkit-scrollbar-thumb { background: #2a2a30; border-radius: 3px; }
+    .search-result {
+      padding: 10px 14px; border-radius: 5px;
+      cursor: pointer;
+      display: grid; grid-template-columns: auto 1fr auto;
+      gap: 12px; align-items: center;
+      font-size: 13px;
+      transition: background 0.1s;
+    }
+    .search-result:hover, .search-result.active { background: var(--card-3); }
+    .search-result .badge {
+      font-family: 'JetBrains Mono', monospace; font-weight: 700;
+      font-size: 11px; padding: 3px 8px; border-radius: 4px;
+      letter-spacing: 0.5px;
+    }
+    .search-result.red    .badge { color: var(--bad);  background: var(--bad-soft); }
+    .search-result.amber  .badge { color: var(--warn); background: var(--warn-soft); }
+    .search-result.info   .badge { color: var(--fg-soft); background: rgba(255,255,255,0.06); }
+    .search-result .label { color: var(--fg); line-height: 1.35; }
+    .search-result .meta {
+      font-size: 9px; letter-spacing: 1.5px; color: var(--muted);
+      text-transform: uppercase; font-weight: 500; margin-top: 3px;
+    }
+    .search-result .kind {
+      font-family: 'JetBrains Mono', monospace; font-size: 9px;
+      color: var(--accent); letter-spacing: 1.5px; text-transform: uppercase;
+      padding: 3px 8px; border-radius: 4px;
+      background: var(--accent-soft);
+    }
+    #search-empty {
+      padding: 30px 22px; text-align: center;
+      color: var(--muted); font-size: 12px; letter-spacing: 1.5px;
+      text-transform: uppercase;
+    }
+    #search-hint {
+      padding: 10px 18px;
+      font-size: 10px; letter-spacing: 1.5px; color: var(--muted);
+      text-transform: uppercase;
+      border-top: 1px solid var(--line);
+      background: var(--bg-soft);
+      display: flex; gap: 18px; align-items: center;
+    }
+    #search-hint .kbd {
+      font-family: 'JetBrains Mono', monospace; font-size: 9px;
+      padding: 2px 6px; border-radius: 3px;
+      border: 1px solid var(--line);
+      color: var(--fg-soft);
+    }
+
+    /* Events map markers */
+    .event-marker {
+      width: 22px; height: 22px; border-radius: 50%;
+      background: linear-gradient(135deg, #a78bfa, #8b5cf6);
+      border: 2px solid var(--bg);
+      box-shadow: 0 0 0 2px rgba(167,139,250,0.4), 0 0 14px rgba(167,139,250,0.4);
+      display: flex; align-items: center; justify-content: center;
+      color: white; font-size: 13px;
+      animation: pinPulse 2.6s ease-in-out infinite;
+    }
+    .brand-block { display: flex; align-items: center; gap: 18px; }
+    .live-pip {
+      display: inline-flex; align-items: center; gap: 8px;
+      padding: 5px 10px 5px 12px;
+      background: rgba(248,113,113,0.08);
+      border: 1px solid rgba(248,113,113,0.3);
+      border-radius: 999px;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 9px; letter-spacing: 2.5px; color: var(--bad);
+      text-transform: uppercase; font-weight: 600;
+    }
+    .live-pip::before {
+      content: ''; width: 7px; height: 7px; border-radius: 50%;
+      background: var(--bad);
+      box-shadow: 0 0 0 0 var(--bad-glow);
+      animation: livePulse 1.8s ease-in-out infinite;
+    }
+    @keyframes livePulse {
+      0%, 100% { box-shadow: 0 0 0 0 var(--bad-glow); }
+      50%      { box-shadow: 0 0 0 6px rgba(248,113,113,0); }
+    }
+    .brand {
+      display: flex; flex-direction: column; line-height: 1.05;
+    }
+    .brand .small {
+      font-size: 10px; letter-spacing: 3.5px; color: var(--muted);
+      font-weight: 500;
+    }
+    .brand .name {
+      font-size: 20px; font-weight: 700; letter-spacing: -0.015em;
+      margin-top: 3px;
+    }
+    .brand .accent { color: var(--accent); }
+
+    .headline { display: flex; gap: 10px; justify-content: center; }
+    .pill {
+      display: inline-flex; align-items: baseline; gap: 10px;
+      padding: 10px 16px; border-radius: 6px;
+      border: 1px solid var(--line);
+      background: var(--card-3);
+      font-size: 13px;
+      transition: border-color 0.2s, background 0.2s;
+    }
+    .pill .n {
+      font-size: 26px; font-weight: 700; letter-spacing: -0.025em;
+      font-variant-numeric: tabular-nums;
+    }
+    .pill .lbl {
+      font-size: 9px; letter-spacing: 2.5px; color: var(--muted);
+      text-transform: uppercase; font-weight: 500;
+    }
+    .pill.red {
+      border-color: rgba(248,113,113,0.4);
+      background: linear-gradient(180deg, rgba(248,113,113,0.07), var(--card-3));
+    }
+    .pill.red    .n { color: var(--bad); }
+    .pill.red.hot { animation: pillPulse 2.4s ease-in-out infinite; }
+    @keyframes pillPulse {
+      0%, 100% { box-shadow: 0 0 0 0 rgba(248,113,113,0); }
+      50%      { box-shadow: 0 0 0 4px rgba(248,113,113,0.08); }
+    }
+    .pill.amber {
+      border-color: rgba(251,191,36,0.35);
+      background: linear-gradient(180deg, rgba(251,191,36,0.04), var(--card-3));
+    }
+    .pill.amber  .n { color: var(--warn); }
+    .pill.info   .n { color: var(--fg); }
+
+    .clock {
+      text-align: right; line-height: 1.05;
+      display: flex; flex-direction: column; align-items: flex-end; gap: 4px;
+    }
+    .clock .time {
+      font-size: 30px; font-weight: 700; letter-spacing: -0.025em;
+      font-variant-numeric: tabular-nums;
+    }
+    .clock .date {
+      font-size: 10px; letter-spacing: 3px; color: var(--muted);
+      text-transform: uppercase; font-weight: 500;
+    }
+
+    /* Map */
+    #map-wrap { grid-area: map; position: relative; border-right: 1px solid var(--line); }
+    #map { position: absolute; inset: 0; background: var(--bg); }
+    .leaflet-container { background: var(--bg); }
+    /* Lift Leaflet bottom controls above the VMS ticker */
+    #map-wrap .leaflet-bottom { bottom: 38px !important; }
+    .leaflet-control-attribution {
+      background: rgba(10,10,11,0.75) !important;
+      color: var(--muted) !important;
+      font-size: 9px;
+      padding: 2px 8px !important;
+      border-top-left-radius: 4px;
+      letter-spacing: 0.3px;
+    }
+    .leaflet-control-attribution a { color: var(--muted); }
+    .leaflet-control-zoom {
+      border: 1px solid var(--line) !important;
+      box-shadow: 0 4px 14px rgba(0,0,0,0.4) !important;
+    }
+    .leaflet-control-zoom a {
+      background: rgba(17,17,20,0.92) !important;
+      color: var(--fg-soft) !important;
+      border-bottom-color: var(--line) !important;
+      backdrop-filter: blur(6px);
+    }
+    .leaflet-control-zoom a:hover { background: var(--card-3) !important; color: var(--fg) !important; }
+
+    /* Side panel */
+    #side {
+      grid-area: side; overflow-y: auto;
+      background: var(--card); border-left: 1px solid var(--line);
+      display: flex; flex-direction: column;
+    }
+    #side::-webkit-scrollbar { width: 5px; }
+    #side::-webkit-scrollbar-track { background: transparent; }
+    #side::-webkit-scrollbar-thumb { background: #2a2a30; border-radius: 3px; }
+
+    .section-head {
+      display: flex; justify-content: space-between; align-items: baseline;
+      padding: 18px 18px 8px; position: sticky; top: 0;
+      background: linear-gradient(180deg, var(--card) 70%, rgba(17,17,20,0.95));
+      z-index: 2; backdrop-filter: blur(4px);
+    }
+    .section-head h3 {
+      margin: 0; font-size: 10px; letter-spacing: 3.5px;
+      color: var(--fg-soft); text-transform: uppercase; font-weight: 600;
+    }
+    .section-head .more {
+      font-size: 9px; color: var(--muted); letter-spacing: 1.5px;
+      text-transform: uppercase;
+    }
+
+    .top-list { padding: 2px 14px 10px; }
+    .top-item {
+      position: relative;
+      padding: 11px 12px 11px 14px;
+      margin-bottom: 7px;
+      background: var(--card-2);
+      border: 1px solid var(--line);
+      border-radius: 5px;
+      cursor: pointer;
+      transition: background 0.15s, border-color 0.15s, transform 0.15s;
+      overflow: hidden;
+    }
+    .top-item::before {
+      content: '';
+      position: absolute; left: 0; top: 0; bottom: 0;
+      width: 3px; background: var(--muted-2);
+      transition: background 0.15s;
+    }
+    .top-item:hover {
+      background: var(--card-3);
+      border-color: rgba(255,255,255,0.08);
+    }
+    .top-item.red    { background: linear-gradient(90deg, var(--bad-soft) 0%, var(--card-2) 30%); }
+    .top-item.red::before    { background: var(--bad); box-shadow: 0 0 12px var(--bad-glow); }
+    .top-item.amber  { background: linear-gradient(90deg, var(--warn-soft) 0%, var(--card-2) 30%); }
+    .top-item.amber::before  { background: var(--warn); }
+    .top-item.green::before  { background: var(--good); }
+
+    .top-item .meta {
+      display: flex; gap: 8px; align-items: center;
+      font-size: 9px; letter-spacing: 1.8px;
+      color: var(--muted); text-transform: uppercase;
+      margin-bottom: 5px; font-weight: 500;
+    }
+    .top-item .meta .road {
+      color: var(--accent); font-weight: 700;
+      font-family: 'JetBrains Mono', monospace;
+      letter-spacing: 0.5px;
+      padding: 1px 6px;
+      background: var(--accent-soft);
+      border-radius: 3px;
+    }
+    .top-item .meta .sev-r {
+      color: var(--bad); font-weight: 700;
+      padding: 1px 6px; border-radius: 3px;
+      background: rgba(248,113,113,0.12);
+    }
+    .top-item .meta .sev-a {
+      color: var(--warn); font-weight: 700;
+      padding: 1px 6px; border-radius: 3px;
+      background: rgba(251,191,36,0.10);
+    }
+    .top-item .meta .dup {
+      color: var(--fg-soft); font-weight: 700;
+      font-family: 'JetBrains Mono', monospace;
+      padding: 1px 6px; border-radius: 3px;
+      background: rgba(255,255,255,0.06);
+      letter-spacing: 0;
+    }
+    .top-item .summary {
+      font-size: 13px; line-height: 1.45;
+      color: var(--fg); font-weight: 500;
+    }
+
+    .towns {
+      padding: 2px 14px 14px;
+      display: grid; grid-template-columns: 1fr 1fr; gap: 6px;
+    }
+    .town {
+      position: relative;
+      padding: 9px 11px 9px 14px;
+      border-radius: 4px;
+      background: var(--card-2); border: 1px solid var(--line);
+      display: flex; justify-content: space-between; align-items: center;
+      font-size: 12px;
+      overflow: hidden;
+    }
+    .town::before {
+      content: ''; position: absolute; left: 0; top: 0; bottom: 0;
+      width: 3px; background: var(--muted-2);
+    }
+    .town .name { color: var(--fg-soft); font-weight: 500; }
+    .town .count {
+      font-family: 'JetBrains Mono', monospace; font-size: 12px;
+      font-variant-numeric: tabular-nums;
+      color: var(--muted-2);
+    }
+    .town.red {
+      background: linear-gradient(90deg, var(--bad-soft) 0%, var(--card-2) 70%);
+      border-color: rgba(248,113,113,0.25);
+    }
+    .town.red::before { background: var(--bad); box-shadow: 0 0 8px var(--bad-glow); }
+    .town.red .name { color: var(--fg); font-weight: 600; }
+    .town.red .count { color: var(--bad); font-weight: 700; }
+    .town.amber {
+      background: linear-gradient(90deg, var(--warn-soft) 0%, var(--card-2) 70%);
+      border-color: rgba(251,191,36,0.2);
+    }
+    .town.amber::before { background: var(--warn); }
+    .town.amber .name { color: var(--fg); }
+    .town.amber .count { color: var(--warn); font-weight: 600; }
+    .town.info::before { background: var(--good); opacity: 0.5; }
+    .town.info .count { color: var(--good); }
+    .town.clear { opacity: 0.55; }
+
+    .region-label {
+      grid-column: 1 / -1;
+      font-size: 9px; letter-spacing: 3px; color: var(--accent);
+      text-transform: uppercase; padding: 14px 0 4px; font-weight: 600;
+      display: flex; align-items: center; gap: 8px;
+    }
+    .region-label::after {
+      content: ''; flex: 1; height: 1px;
+      background: linear-gradient(90deg, var(--line), transparent);
+    }
+
+    /* Trunk strip — financial-ticker style */
+    #trunk {
+      grid-area: trunk;
+      background: linear-gradient(180deg, var(--card-2), var(--card));
+      border-top: 1px solid var(--line);
+      display: flex; align-items: stretch;
+      padding: 12px 20px; gap: 8px; overflow-x: auto;
+    }
+    #trunk::before {
+      content: 'TRUNK';
+      flex-shrink: 0;
+      align-self: center;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 9px; letter-spacing: 3px; color: var(--accent);
+      padding-right: 14px;
+      border-right: 1px solid var(--line);
+      margin-right: 8px;
+      font-weight: 600;
+    }
+    .trunk-card {
+      flex: 1 1 0; min-width: 156px; max-width: 220px;
+      padding: 10px 14px;
+      border-radius: 5px;
+      background: var(--card-2);
+      border: 1px solid var(--line);
+      display: flex; flex-direction: column; gap: 4px;
+      position: relative;
+      transition: transform 0.15s, border-color 0.15s;
+      overflow: hidden;
+    }
+    .trunk-card:hover { transform: translateY(-1px); }
+    .trunk-card .road-row {
+      display: flex; align-items: center; justify-content: space-between; gap: 8px;
+    }
+    .trunk-card .road-row .road-wrap {
+      display: flex; align-items: center; gap: 8px;
+    }
+    .trunk-card .status-dot {
+      width: 8px; height: 8px; border-radius: 50%;
+      background: var(--muted-2);
+      flex-shrink: 0;
+    }
+    .trunk-card.red   { border-color: rgba(248,113,113,0.4); background: linear-gradient(180deg, var(--bad-soft), var(--card-2)); }
+    .trunk-card.red   .status-dot { background: var(--bad); box-shadow: 0 0 8px var(--bad-glow); animation: livePulse 1.8s ease-in-out infinite; }
+    .trunk-card.amber { border-color: rgba(251,191,36,0.3); background: linear-gradient(180deg, var(--warn-soft), var(--card-2)); }
+    .trunk-card.amber .status-dot { background: var(--warn); }
+    .trunk-card.green .status-dot { background: var(--good); opacity: 0.7; }
+
+    .trunk-card .road {
+      font-size: 19px; font-weight: 700; letter-spacing: -0.025em;
+      font-family: 'JetBrains Mono', monospace;
+      color: var(--fg);
+    }
+    .trunk-card.red   .road { color: var(--bad); }
+    .trunk-card.amber .road { color: var(--warn); }
+    .trunk-card .delay {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 14px; font-weight: 700;
+      color: var(--muted-2);
+      letter-spacing: -0.02em;
+      font-variant-numeric: tabular-nums;
+    }
+    .trunk-card .delay.hot { color: var(--bad); }
+    .trunk-card .delay.warm { color: var(--warn); }
+    .trunk-card .stats {
+      font-size: 10px; letter-spacing: 0.8px; color: var(--muted);
+      text-transform: uppercase; font-weight: 500;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      font-variant-numeric: tabular-nums;
+    }
+    .trunk-card .stats .sep { color: var(--muted-2); margin: 0 4px; }
+    .trunk-card .stats .seg-pct { color: var(--fg-soft); font-weight: 600; }
+
+    /* Map pins */
+    .pin {
+      width: 12px; height: 12px; border-radius: 50%;
+      border: 2px solid var(--bg); box-shadow: 0 0 8px rgba(0,0,0,0.6);
+    }
+    .pin.red   {
+      background: var(--bad);
+      box-shadow: 0 0 0 2px var(--bg), 0 0 14px var(--bad-glow), 0 0 4px rgba(0,0,0,0.6);
+      animation: pinPulse 2.4s ease-in-out infinite;
+    }
+    .pin.amber { background: var(--warn); box-shadow: 0 0 0 2px var(--bg), 0 0 10px rgba(251,191,36,0.45); }
+    .pin.green { background: var(--good); }
+    .pin.blue  { background: #60a5fa; opacity: 0.8; }
+    @keyframes pinPulse {
+      0%, 100% { transform: scale(1); }
+      50%      { transform: scale(1.15); }
+    }
+
+    .leaflet-popup-content-wrapper {
+      background: var(--card-2); color: var(--fg);
+      border: 1px solid var(--line); border-radius: 4px;
+    }
+    .leaflet-popup-tip { background: var(--card-2); border: 1px solid var(--line); }
+    .leaflet-popup-content { font-size: 12px; line-height: 1.4; margin: 10px 12px; }
+
+    /* Worst delays — stock-ticker style */
+    .delays { padding: 2px 14px 12px; }
+    .delay-item {
+      display: grid;
+      grid-template-columns: 56px 1fr auto;
+      gap: 10px; align-items: center;
+      padding: 10px 12px; margin-bottom: 6px;
+      background: var(--card-2); border: 1px solid var(--line); border-radius: 5px;
+      font-size: 12px;
+      cursor: pointer;
+      transition: background 0.15s, border-color 0.15s;
+    }
+    .delay-item:hover {
+      background: var(--card-3);
+      border-color: rgba(255,255,255,0.08);
+    }
+    .delay-item .road {
+      font-family: 'JetBrains Mono', monospace; font-weight: 700;
+      color: var(--accent); font-size: 14px; letter-spacing: 0.5px;
+      padding: 4px 8px;
+      background: var(--accent-soft);
+      border-radius: 4px;
+      text-align: center;
+    }
+    .delay-item .seg {
+      color: var(--fg); font-size: 13px; font-weight: 500;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+      line-height: 1.3;
+    }
+    .delay-item .seg .status {
+      display: block; font-size: 9px; letter-spacing: 1.8px;
+      color: var(--muted); text-transform: uppercase; margin-top: 3px;
+      font-weight: 500;
+    }
+    .delay-item .delta {
+      font-family: 'JetBrains Mono', monospace; font-size: 17px; font-weight: 700;
+      color: var(--fg-soft);
+      letter-spacing: -0.02em;
+      font-variant-numeric: tabular-nums;
+    }
+    .delay-item.hot {
+      background: linear-gradient(90deg, var(--bad-soft) 0%, var(--card-2) 60%);
+      border-color: rgba(248,113,113,0.25);
+    }
+    .delay-item.hot .delta { color: var(--bad); }
+    .delay-item.hot .seg .status { color: var(--bad); }
+    .delay-item.warm {
+      background: linear-gradient(90deg, var(--warn-soft) 0%, var(--card-2) 60%);
+      border-color: rgba(251,191,36,0.2);
+    }
+    .delay-item.warm .delta { color: var(--warn); }
+
+    /* VMS ticker (overlay along bottom of map) */
+    #vms-strip {
+      position: absolute; left: 0; right: 0; bottom: 0;
+      background: linear-gradient(180deg, rgba(10,10,11,0.6), rgba(10,10,11,0.96));
+      border-top: 1px solid var(--line);
+      padding: 9px 16px;
+      font-size: 12.5px; color: var(--fg);
+      display: flex; align-items: center; gap: 14px;
+      pointer-events: none;
+      backdrop-filter: blur(8px);
+      overflow: hidden;
+      max-width: 100%;
+      z-index: 1000;  /* above Leaflet marker/popup/control panes */
+    }
+    #vms-strip .vms-label {
+      flex-shrink: 0;
+      display: inline-flex; align-items: center; gap: 8px;
+      color: var(--accent); font-family: 'JetBrains Mono', monospace;
+      font-size: 9px; letter-spacing: 2.5px; text-transform: uppercase;
+      padding-right: 14px; border-right: 1px solid var(--line);
+      font-weight: 600;
+    }
+    #vms-strip .vms-label::before {
+      content: ''; width: 6px; height: 6px; border-radius: 50%;
+      background: var(--bad);
+      box-shadow: 0 0 0 0 var(--bad-glow);
+      animation: livePulse 1.8s ease-in-out infinite;
+    }
+    #vms-strip .vms-track {
+      flex: 1; overflow: hidden; position: relative; height: 20px;
+      mask-image: linear-gradient(90deg, transparent, #000 24px, #000 calc(100% - 24px), transparent);
+      -webkit-mask-image: linear-gradient(90deg, transparent, #000 24px, #000 calc(100% - 24px), transparent);
+    }
+    #vms-strip .vms-rail {
+      position: absolute; top: 0; left: 0; white-space: nowrap;
+      will-change: transform;
+      animation: vmsScroll linear infinite;
+    }
+    #vms-strip .vms-msg {
+      display: inline-block; margin-right: 38px;
+      color: var(--fg-soft);
+    }
+    #vms-strip .vms-msg .road {
+      color: var(--warn); font-family: 'JetBrains Mono', monospace; font-weight: 700;
+      margin-right: 8px;
+      padding: 1px 6px;
+      background: rgba(251,191,36,0.10);
+      border-radius: 3px;
+    }
+    @keyframes vmsScroll {
+      0%   { transform: translateX(0); }
+      100% { transform: translateX(-50%); }
+    }
+
+    /* Inline camera thumbnail (right-side of list rows) */
+    .cam-thumb {
+      width: 64px; height: 42px; border-radius: 4px;
+      object-fit: cover; background: #000;
+      border: 1px solid var(--line);
+      flex-shrink: 0;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.4);
+      transition: border-color 0.15s, transform 0.15s;
+    }
+    .cam-thumb:hover {
+      border-color: var(--accent);
+      transform: scale(1.05);
+    }
+    .top-item .row-flex {
+      display: grid; grid-template-columns: 1fr 64px; gap: 12px; align-items: start;
+    }
+    .delay-item.with-thumb {
+      grid-template-columns: 56px 1fr auto 64px;
+    }
+    .causes-strip {
+      margin-top: 6px; padding-top: 6px;
+      border-top: 1px dashed var(--line);
+      font-size: 10px; color: var(--muted);
+      letter-spacing: 0.5px;
+    }
+    .causes-strip .cause {
+      display: block; padding: 2px 0;
+      color: var(--fg);
+    }
+    .causes-strip .cause .conf {
+      font-family: 'JetBrains Mono', monospace; font-size: 8px;
+      letter-spacing: 1.5px; padding: 1px 5px; border-radius: 999px;
+      margin-right: 6px; vertical-align: 1px;
+      border: 1px solid var(--line);
+    }
+    .causes-strip .cause.high   .conf { color: var(--bad);  border-color: rgba(248,113,113,0.4); }
+    .causes-strip .cause.medium .conf { color: var(--warn); border-color: rgba(251,191,36,0.4); }
+    .causes-strip .cause.low    .conf { color: var(--muted); }
+    .causes-strip .cause .dist {
+      font-family: 'JetBrains Mono', monospace; font-size: 9px;
+      color: var(--muted); margin-left: 4px;
+    }
+
+    /* Live cameras carousel (bottom strip) */
+    #cams {
+      grid-area: cams;
+      background: linear-gradient(180deg, var(--card), var(--bg-soft));
+      border-top: 1px solid var(--line);
+      padding: 11px 18px 12px;
+      display: flex; flex-direction: column; gap: 8px;
+      overflow: hidden;
+    }
+    #cams .cams-head {
+      display: flex; justify-content: space-between; align-items: center;
+      font-size: 9px; letter-spacing: 3px; color: var(--muted);
+      text-transform: uppercase; font-weight: 500;
+    }
+    #cams .cams-head .lbl {
+      display: inline-flex; align-items: center; gap: 7px;
+      color: var(--accent); font-weight: 600;
+    }
+    #cams .cams-head .lbl::before {
+      content: ''; width: 6px; height: 6px; border-radius: 50%;
+      background: var(--bad);
+      box-shadow: 0 0 0 0 var(--bad-glow);
+      animation: livePulse 1.8s ease-in-out infinite;
+    }
+    #cams .cams-rail {
+      display: flex; gap: 10px; overflow-x: auto;
+      padding-bottom: 4px;
+      scroll-behavior: smooth;
+      flex: 1;
+    }
+    #cams .cams-rail::-webkit-scrollbar { height: 5px; }
+    #cams .cams-rail::-webkit-scrollbar-track { background: transparent; }
+    #cams .cams-rail::-webkit-scrollbar-thumb { background: #2a2a30; border-radius: 3px; }
+    .cam-card {
+      flex-shrink: 0; width: 168px;
+      background: var(--card-2);
+      border: 1px solid var(--line);
+      border-radius: 5px;
+      overflow: hidden;
+      cursor: pointer;
+      display: flex; flex-direction: column;
+      position: relative;
+      transition: border-color 0.15s, transform 0.15s;
+    }
+    .cam-card:hover {
+      border-color: var(--accent);
+      transform: translateY(-2px);
+    }
+    .cam-card .img-wrap {
+      position: relative; height: 96px;
+      background: #000; overflow: hidden;
+    }
+    .cam-card img {
+      width: 100%; height: 100%; object-fit: cover;
+      display: block;
+    }
+    .cam-card .live-dot {
+      position: absolute; top: 7px; right: 7px;
+      width: 6px; height: 6px; border-radius: 50%;
+      background: var(--bad);
+      box-shadow: 0 0 8px var(--bad-glow);
+      animation: livePulse 1.8s ease-in-out infinite;
+    }
+    .cam-card .meta {
+      padding: 7px 9px 8px;
+      display: flex; flex-direction: column; gap: 2px;
+      border-top: 1px solid var(--line);
+    }
+    .cam-card .name {
+      font-size: 11.5px; color: var(--fg); line-height: 1.2;
+      font-weight: 500;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .cam-card .reason {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 8.5px; letter-spacing: 1.8px; color: var(--accent);
+      text-transform: uppercase; font-weight: 600;
+    }
+
+    /* Camera modal — click a thumb to expand */
+    #cam-modal {
+      position: fixed; inset: 0;
+      background: rgba(8,8,10,0.86);
+      backdrop-filter: blur(10px);
+      z-index: 9999;
+      display: none; align-items: center; justify-content: center;
+      padding: 40px;
+    }
+    #cam-modal.on { display: flex; }
+    #cam-modal-frame {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      box-shadow: 0 30px 90px rgba(0,0,0,0.7), 0 0 0 1px rgba(255,255,255,0.04);
+      overflow: hidden;
+      max-width: min(88vw, 1100px);
+      max-height: 88vh;
+      display: flex; flex-direction: column;
+    }
+    #cam-modal-head {
+      display: flex; align-items: center; gap: 14px;
+      padding: 14px 18px;
+      border-bottom: 1px solid var(--line);
+      background: linear-gradient(180deg, var(--card-2), var(--card));
+    }
+    #cam-modal-head .live {
+      display: inline-flex; align-items: center; gap: 7px;
+      padding: 4px 9px 4px 11px;
+      background: rgba(248,113,113,0.10);
+      border: 1px solid rgba(248,113,113,0.3);
+      border-radius: 999px;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 9px; letter-spacing: 2.5px; color: var(--bad);
+      text-transform: uppercase; font-weight: 700;
+    }
+    #cam-modal-head .live::before {
+      content: ''; width: 6px; height: 6px; border-radius: 50%;
+      background: var(--bad);
+      animation: livePulse 1.8s ease-in-out infinite;
+    }
+    #cam-modal-head .info {
+      flex: 1; display: flex; flex-direction: column; gap: 3px; min-width: 0;
+    }
+    #cam-modal-head .name {
+      font-size: 16px; font-weight: 700; letter-spacing: -0.01em;
+      color: var(--fg);
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    #cam-modal-head .sub {
+      font-size: 10px; letter-spacing: 2px; color: var(--muted);
+      text-transform: uppercase; font-weight: 500;
+      font-family: 'JetBrains Mono', monospace;
+    }
+    #cam-modal-head .updated {
+      color: var(--accent); margin-left: 6px;
+    }
+    #cam-modal-head .close {
+      width: 36px; height: 36px; border-radius: 6px;
+      background: var(--card-3); border: 1px solid var(--line);
+      color: var(--muted); cursor: pointer;
+      font-size: 18px; line-height: 1;
+      transition: color 0.15s, border-color 0.15s;
+    }
+    #cam-modal-head .close:hover {
+      color: var(--fg); border-color: var(--accent);
+    }
+    #cam-modal-stage {
+      flex: 1; min-height: 0;
+      background: #000;
+      display: flex; align-items: center; justify-content: center;
+      overflow: hidden;
+      position: relative;
+    }
+    #cam-modal-img {
+      display: block;
+      max-width: 100%; max-height: 100%;
+      width: auto; height: auto;
+      image-rendering: -webkit-optimize-contrast;
+    }
+    #cam-modal-stage .corner {
+      position: absolute;
+      font-family: 'JetBrains Mono', monospace; font-size: 10px;
+      color: rgba(255,255,255,0.55); letter-spacing: 1.5px;
+      text-transform: uppercase;
+      padding: 4px 8px; border-radius: 3px;
+      background: rgba(0,0,0,0.45);
+      pointer-events: none;
+    }
+    #cam-modal-stage .corner.tl { top: 10px; left: 10px; }
+    #cam-modal-stage .corner.br { bottom: 10px; right: 10px; }
+
+    /* ─── Road drilldown panel (slide-over) ─────────────────────────── */
+    #road-panel {
+      position: fixed; top: 0; right: 0; height: 100vh;
+      width: 540px; max-width: 90vw;
+      background: linear-gradient(180deg, var(--card-2), var(--card));
+      border-left: 1px solid var(--accent);
+      box-shadow: -8px 0 40px rgba(0,0,0,0.6);
+      transform: translateX(100%);
+      transition: transform 0.32s cubic-bezier(0.2, 0.8, 0.2, 1);
+      z-index: 1000;
+      display: flex; flex-direction: column;
+      overflow: hidden;
+    }
+    #road-panel.on { transform: translateX(0); }
+    #road-panel header.rp-head {
+      grid-area: unset;
+      padding: 22px 24px 18px;
+      border-bottom: 1px solid var(--line);
+      display: flex; align-items: center; gap: 14px;
+      background: var(--card-2);
+    }
+    #road-panel .rp-code {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 36px; font-weight: 700; letter-spacing: -0.025em;
+      color: var(--accent);
+      padding: 4px 14px;
+      background: var(--accent-soft);
+      border-radius: 6px;
+    }
+    #road-panel.red    .rp-code { color: var(--bad);  background: var(--bad-soft); }
+    #road-panel.amber  .rp-code { color: var(--warn); background: var(--warn-soft); }
+    #road-panel.green  .rp-code { color: var(--good); background: rgba(52,211,153,0.10); }
+    #road-panel .rp-status-block { flex: 1; }
+    #road-panel .rp-status {
+      font-size: 9px; letter-spacing: 3px;
+      color: var(--muted); text-transform: uppercase; font-weight: 600;
+      margin-bottom: 6px;
+    }
+    #road-panel.red    .rp-status { color: var(--bad); }
+    #road-panel.amber  .rp-status { color: var(--warn); }
+    #road-panel.green  .rp-status { color: var(--good); }
+    #road-panel .rp-headline {
+      font-size: 13px; color: var(--fg-soft); font-weight: 500;
+      font-family: 'JetBrains Mono', monospace;
+    }
+    #road-panel .rp-headline .delay {
+      color: var(--bad); font-weight: 700;
+    }
+    #road-panel.amber .rp-headline .delay { color: var(--warn); }
+    #road-panel.green .rp-headline .delay { color: var(--good); }
+    #road-panel .rp-close {
+      background: transparent; border: 1px solid var(--line);
+      color: var(--muted); cursor: pointer;
+      width: 36px; height: 36px; border-radius: 6px;
+      font-size: 18px; line-height: 1;
+      transition: color 0.15s, border-color 0.15s;
+    }
+    #road-panel .rp-close:hover {
+      color: var(--fg); border-color: var(--accent);
+    }
+    #road-panel .rp-body {
+      flex: 1; overflow-y: auto;
+      padding: 20px 24px 30px;
+    }
+    #road-panel .rp-body::-webkit-scrollbar { width: 5px; }
+    #road-panel .rp-body::-webkit-scrollbar-thumb { background: #2a2a30; border-radius: 3px; }
+    .rp-section {
+      margin-bottom: 22px;
+    }
+    .rp-section h4 {
+      margin: 0 0 10px;
+      font-size: 10px; letter-spacing: 3px; color: var(--accent);
+      text-transform: uppercase; font-weight: 600;
+      display: flex; justify-content: space-between; align-items: baseline;
+    }
+    .rp-section h4 .n {
+      color: var(--muted); font-family: 'JetBrains Mono', monospace;
+      letter-spacing: 1.5px;
+    }
+    .rp-row {
+      padding: 10px 12px; margin-bottom: 6px;
+      background: var(--card-3); border: 1px solid var(--line);
+      border-radius: 5px;
+      display: grid; grid-template-columns: 1fr auto;
+      gap: 8px; align-items: center;
+      font-size: 12.5px;
+      cursor: pointer;
+      transition: border-color 0.15s, background 0.15s;
+    }
+    .rp-row:hover { background: var(--card-2); border-color: rgba(255,255,255,0.08); }
+    .rp-row .label { color: var(--fg); line-height: 1.4; }
+    .rp-row .meta {
+      display: block; font-size: 9px; letter-spacing: 1.8px;
+      color: var(--muted); text-transform: uppercase;
+      margin-top: 3px; font-weight: 500;
+    }
+    .rp-row .delta {
+      font-family: 'JetBrains Mono', monospace; font-size: 14px; font-weight: 700;
+      font-variant-numeric: tabular-nums; letter-spacing: -0.02em;
+    }
+    .rp-row.red    .delta { color: var(--bad); }
+    .rp-row.amber  .delta { color: var(--warn); }
+    .rp-row.red {
+      background: linear-gradient(90deg, var(--bad-soft) 0%, var(--card-3) 60%);
+      border-color: rgba(248,113,113,0.25);
+    }
+    .rp-row.amber {
+      background: linear-gradient(90deg, var(--warn-soft) 0%, var(--card-3) 60%);
+      border-color: rgba(251,191,36,0.2);
+    }
+    .rp-empty {
+      font-size: 11.5px; color: var(--muted);
+      letter-spacing: 1px;
+      padding: 8px 12px;
+    }
+    .rp-cams {
+      display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px;
+    }
+    .rp-cam {
+      background: var(--card-3); border: 1px solid var(--line);
+      border-radius: 5px; overflow: hidden; cursor: pointer;
+      transition: border-color 0.15s, transform 0.15s;
+    }
+    .rp-cam:hover { border-color: var(--accent); transform: translateY(-2px); }
+    .rp-cam img {
+      width: 100%; height: 96px; object-fit: cover; background: #000;
+      display: block;
+    }
+    .rp-cam .meta {
+      padding: 6px 8px; font-size: 10.5px; color: var(--fg-soft); font-weight: 500;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .rp-cam .meta .d {
+      font-family: 'JetBrains Mono', monospace; font-size: 9px;
+      color: var(--accent); letter-spacing: 1.5px;
+      text-transform: uppercase; display: block; margin-top: 2px;
+    }
+
+    /* Trunk cards become clickable */
+    .trunk-card { cursor: pointer; }
+
+    /* Road focus mode — dim everything except the highlighted road */
+    .leaflet-container.road-focus .leaflet-tile-pane     { filter: brightness(0.55) saturate(0.8); transition: filter 0.35s; }
+    .leaflet-container.road-focus .leaflet-marker-pane,
+    .leaflet-container.road-focus .leaflet-overlay-pane,
+    .leaflet-container.road-focus .leaflet-heatmap-layer { opacity: 0.18; transition: opacity 0.35s; }
+    .leaflet-container .leaflet-tile-pane,
+    .leaflet-container .leaflet-marker-pane,
+    .leaflet-container .leaflet-overlay-pane,
+    .leaflet-container .leaflet-heatmap-layer { transition: filter 0.35s, opacity 0.35s; }
+
+    /* Road focus indicator chip floating over the map */
+    #road-focus-chip {
+      position: absolute; top: 14px; left: 50%; transform: translateX(-50%);
+      z-index: 700;
+      display: none;
+      align-items: center; gap: 10px;
+      padding: 7px 14px 7px 12px;
+      background: rgba(10,10,11,0.85);
+      backdrop-filter: blur(8px);
+      border: 1px solid var(--accent);
+      border-radius: 999px;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 11px; letter-spacing: 2px; text-transform: uppercase;
+      color: var(--accent);
+      box-shadow: 0 0 24px rgba(255,87,34,0.25);
+    }
+    #road-focus-chip.on { display: inline-flex; }
+    #road-focus-chip .road-tag {
+      font-size: 13px; font-weight: 700; letter-spacing: 0.5px;
+      padding: 1px 6px; border-radius: 3px;
+      background: var(--accent-soft);
+    }
+    #road-focus-chip button {
+      background: transparent; color: var(--muted);
+      border: none; cursor: pointer;
+      font-size: 13px; line-height: 1;
+      padding: 0 0 0 8px;
+    }
+    #road-focus-chip button:hover { color: var(--fg); }
+
+    /* Bus + train layer markers */
+    .bus-marker {
+      width: 18px; height: 18px;
+      transform: rotate(0deg);
+      transform-origin: center;
+    }
+    .bus-marker svg { display: block; }
+    .train-marker {
+      width: 16px; height: 16px;
+      background: #60a5fa;
+      border: 2px solid var(--bg);
+      border-radius: 3px;
+      box-shadow: 0 0 0 2px rgba(96,165,250,0.4), 0 2px 6px rgba(0,0,0,0.5);
+      display: flex; align-items: center; justify-content: center;
+      color: white; font-size: 10px; font-weight: 700;
+    }
+    .train-marker.delay { background: var(--warn); box-shadow: 0 0 0 2px rgba(251,191,36,0.4), 0 2px 6px rgba(0,0,0,0.5); }
+    .train-marker.cancelled { background: var(--bad); box-shadow: 0 0 0 2px var(--bad-glow), 0 2px 6px rgba(0,0,0,0.5); }
+
+    /* Heatmap toggle */
+    .map-controls {
+      position: absolute; top: 14px; left: 14px; z-index: 500;
+      display: flex; gap: 6px;
+    }
+    .map-controls button {
+      background: rgba(10,10,11,0.78);
+      backdrop-filter: blur(8px);
+      color: var(--fg-soft);
+      border: 1px solid var(--line);
+      padding: 7px 13px; border-radius: 5px;
+      font-size: 10px; letter-spacing: 1.8px; text-transform: uppercase;
+      font-family: 'JetBrains Mono', monospace;
+      font-weight: 500;
+      cursor: pointer;
+      transition: color 0.15s, border-color 0.15s, background 0.15s;
+    }
+    .map-controls button:hover {
+      color: var(--fg);
+      border-color: rgba(255,255,255,0.15);
+    }
+    .map-controls button.on {
+      color: var(--accent);
+      border-color: rgba(255,87,34,0.5);
+      background: rgba(255,87,34,0.08);
+    }
+
+    /* Status footer in side */
+    .stale {
+      padding: 12px 18px;
+      font-size: 9.5px; color: var(--muted);
+      letter-spacing: 2.5px; text-transform: uppercase;
+      border-top: 1px solid var(--line);
+      font-family: 'JetBrains Mono', monospace;
+      margin-top: auto;
+      background: var(--bg-soft);
+      font-weight: 500;
+    }
+
+    /* Highlight pulse for new red items */
+    @keyframes pulseRed { 0%, 100% { box-shadow: 0 0 0 0 rgba(248,113,113,0.5); } 50% { box-shadow: 0 0 0 6px rgba(248,113,113,0); } }
+    .top-item.red.fresh { animation: pulseRed 1.6s ease 4; }
+  </style>
+</head>
+<body>
+  <div id="root">
+    <div id="warning-bar"></div>
+
+    <header>
+      <div class="brand-block">
+        <div class="brand">
+          <div class="small mono">TRAVEL · NAR</div>
+          <div class="name">Now Ayrshire Radio <span class="accent">Travel</span></div>
+        </div>
+        <div class="live-pip">LIVE</div>
+      </div>
+      <div class="headline" id="headline"></div>
+      <div class="header-actions">
+        <div id="weather-pill" class="weather-pill" title="Live weather — Ayr">
+          <span class="temp" id="wx-temp">—</span>
+          <div class="meta">
+            <span class="cond" id="wx-cond">—</span>
+            <span id="wx-wind">—</span>
+          </div>
+        </div>
+        <button id="btn-chime" class="muted" title="Chime on new red alerts (currently OFF)">🔔</button>
+        <button id="btn-calendar" title="7-day closures calendar">📅</button>
+        <button id="btn-search" title="Search · ⌘K">🔍</button>
+      </div>
+      <div class="clock">
+        <div class="time mono" id="clock-time">--:--</div>
+        <div class="date mono" id="clock-date">—</div>
+      </div>
+    </header>
+
+    <div id="map-wrap">
+      <div id="map"></div>
+      <div class="map-controls">
+        <button id="toggle-heat" class="on" title="Live congestion heatmap">Heatmap</button>
+        <button id="toggle-pins" class="on" title="Incident pins">Incidents</button>
+        <button id="toggle-cams" title="CCTV pins">Cameras</button>
+        <button id="toggle-buses" title="Live bus positions">Buses</button>
+        <button id="toggle-trains" title="Train stations">Trains</button>
+        <button id="toggle-events" title="Public events">Events</button>
+      </div>
+      <div id="vms-strip">
+        <span class="vms-label">VMS · live</span>
+        <div class="vms-track"><div class="vms-rail" id="vms-rail"></div></div>
+      </div>
+      <div id="road-focus-chip">
+        <span>Focused on</span>
+        <span class="road-tag" id="rfc-tag">—</span>
+        <button id="rfc-clear" title="Clear focus">×</button>
+      </div>
+    </div>
+
+    <aside id="side">
+      <div class="section-head">
+        <h3>Most disruptive</h3>
+        <span class="more mono" id="top-count">—</span>
+      </div>
+      <div class="top-list" id="top-list"></div>
+
+      <div class="section-head">
+        <h3>Worst delays</h3>
+        <span class="more mono" id="delay-count">—</span>
+      </div>
+      <div class="delays" id="delays"></div>
+
+      <div class="section-head">
+        <h3>By town</h3>
+      </div>
+      <div class="towns" id="towns"></div>
+
+      <div class="stale" id="updated">loading…</div>
+    </aside>
+
+    <div id="trunk"></div>
+
+    <div id="cams">
+      <div class="cams-head">
+        <span><span class="lbl">Live</span> · CCTV near disruption</span>
+        <span class="mono" id="cams-count">—</span>
+      </div>
+      <div class="cams-rail" id="cams-rail"></div>
+    </div>
+  </div>
+
+  <div id="cam-modal">
+    <div id="cam-modal-frame">
+      <div id="cam-modal-head">
+        <div class="live">LIVE</div>
+        <div class="info">
+          <div class="name" id="cam-modal-name">—</div>
+          <div class="sub"><span id="cam-modal-source">Traffic Scotland CCTV</span><span class="updated" id="cam-modal-updated"></span></div>
+        </div>
+        <button class="close" id="cam-modal-close" aria-label="Close">×</button>
+      </div>
+      <div id="cam-modal-stage">
+        <img id="cam-modal-img" alt="">
+        <div class="corner tl">CCTV</div>
+        <div class="corner br" id="cam-modal-clock">--:--</div>
+      </div>
+    </div>
+  </div>
+
+  <div id="road-panel">
+    <header class="rp-head">
+      <div class="rp-code" id="rp-code">—</div>
+      <div class="rp-status-block">
+        <div class="rp-status mono" id="rp-status">loading…</div>
+        <div class="rp-headline" id="rp-headline">—</div>
+      </div>
+      <button class="rp-close" id="rp-close" aria-label="Close">×</button>
+    </header>
+    <div class="rp-body" id="rp-body"></div>
+  </div>
+
+  <div id="weather-pop">
+    <h5>Live conditions · Ayr</h5>
+    <dl id="wx-detail"></dl>
+  </div>
+
+  <div id="search-modal">
+    <div id="search-box">
+      <input id="search-input" type="search" placeholder="Search road, town, status, source… (try A77, Ayr, Stagecoach)" autocomplete="off">
+      <div id="search-results"></div>
+      <div id="search-hint">
+        <span><span class="kbd">↑↓</span> navigate</span>
+        <span><span class="kbd">↵</span> select</span>
+        <span><span class="kbd">esc</span> close</span>
+      </div>
+    </div>
+  </div>
+
+<script>
+const POLL_MS = 60_000;          // refresh /api/studio every minute
+const CLOCK_MS = 1_000;
+const REGION_ORDER = ["South", "East", "North"];
+
+// ─── Map ──────────────────────────────────────────────────────────────────
+const map = L.map('map', {
+  zoomControl: false, attributionControl: true,
+  preferCanvas: true,
+}).setView([55.55, -4.55], 10);
+L.control.zoom({ position: 'topright' }).addTo(map);
+
+L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+  maxZoom: 19,
+  attribution: '© OSM · CARTO'
+}).addTo(map);
+
+// Custom pane for the road highlight — sits above marker-pane (600) so it's
+// visible above everything except popups, and gets its own opacity envelope
+// so we can dim other panes without dimming this.
+map.createPane('roadHighlight');
+map.getPane('roadHighlight').style.zIndex = 620;
+map.createPane('roadHighlightGlow');
+map.getPane('roadHighlightGlow').style.zIndex = 619;
+
+const markersLayer = L.layerGroup().addTo(map);
+const cameraLayer = L.layerGroup();
+const busLayer = L.layerGroup();
+const trainLayer = L.layerGroup();
+const roadHighlightLayer = L.layerGroup();
+let heatLayer = null;
+let heatVisible = true;
+let pinsVisible = true;
+let camsVisible = false;
+let busesVisible = false;
+let trainsVisible = false;
+const CAM_REFRESH_MS = 90_000;
+const BUS_REFRESH_MS = 30_000;
+let camRefreshKey = Date.now();
+
+function pinIcon(severity, type) {
+  const sev = (severity || '').toLowerCase();
+  let cls = 'green';
+  if (sev === 'red') cls = 'red';
+  else if (sev === 'amber') cls = 'amber';
+  if (type === 'roadworks' && sev !== 'red') cls = 'amber';
+  if (type === 'ferry') cls = 'blue';
+  return L.divIcon({
+    className: '',
+    html: `<div class="pin ${cls}"></div>`,
+    iconSize: [12, 12],
+    iconAnchor: [6, 6],
+  });
+}
+
+// ─── State ───────────────────────────────────────────────────────────────
+let lastTopIds = new Set();
+
+function fmtTime(d) {
+  return d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+}
+function fmtDate(d) {
+  return d.toLocaleDateString('en-GB', { weekday: 'short', day: '2-digit', month: 'short' }).toUpperCase();
+}
+
+function tickClock() {
+  const now = new Date();
+  document.getElementById('clock-time').textContent = fmtTime(now);
+  document.getElementById('clock-date').textContent = fmtDate(now);
+}
+tickClock();
+setInterval(tickClock, CLOCK_MS);
+
+// ─── Render ──────────────────────────────────────────────────────────────
+function renderHeadline(h) {
+  const el = document.getElementById('headline');
+  el.innerHTML = '';
+  const pills = [
+    ['red', h.red, 'red alerts'],
+    ['amber', h.amber, 'amber'],
+    ['info', h.incidents, 'incidents'],
+    ['info', h.roadworks, 'roadworks'],
+    ['info', h.tro, 'orders'],
+    ['info', h.ferry, 'ferries'],
+  ];
+  for (const [cls, n, lbl] of pills) {
+    if (n === 0 && (cls === 'red' || cls === 'amber')) continue;
+    const hot = cls === 'red' && n > 0 ? 'hot' : '';
+    el.insertAdjacentHTML('beforeend',
+      `<div class="pill ${cls} ${hot}"><span class="n">${n}</span><span class="lbl">${lbl}</span></div>`);
+  }
+}
+
+function renderTop(top) {
+  const el = document.getElementById('top-list');
+  document.getElementById('top-count').textContent = `${top.length} items`;
+  const newIds = new Set();
+  el.innerHTML = top.map(t => {
+    newIds.add(t.id);
+    const sev = (t.severity || '').toLowerCase();
+    const sevCls = sev === 'red' ? 'red' : sev === 'amber' ? 'amber' : sev === 'green' ? 'green' : '';
+    const fresh = sev === 'red' && !lastTopIds.has(t.id) ? 'fresh' : '';
+    const meta = [];
+    if (t.road) meta.push(`<span class="road">${t.road}</span>`);
+    if (t.town) meta.push(t.town);
+    else if (t.region) meta.push(t.region);
+    if (t.type) meta.push(t.type);
+    if (t.dup_count && t.dup_count > 1) meta.push(`<span class="dup">×${t.dup_count}</span>`);
+    const cam = (t.cameras && t.cameras[0]) || null;
+    const camHtml = cam ? `<img class="cam-thumb" src="${camUrl(cam.url)}" alt="${escapeAttr(cam.name)}" data-cam="${escapeAttr(cam.url)}" data-name="${escapeAttr(cam.name)}">` : `<div></div>`;
+    let impactHtml = '';
+    if (t.impacts && t.impacts.length) {
+      impactHtml = `<div class="causes-strip">${t.impacts.slice(0,2).map(i =>
+        `<span class="cause"><span class="conf">+${i.delay_min}m</span>${escapeHtml(i.name || '')}<span class="dist">${i.distance_km}km</span></span>`
+      ).join('')}</div>`;
+    }
+    return `<div class="top-item ${sevCls} ${fresh}" data-lat="${t.lat || ''}" data-lon="${t.lon || ''}" data-id="${t.id}">
+      <div class="row-flex">
+        <div>
+          <div class="meta">${meta.join(' · ')}</div>
+          <div class="summary">${escapeHtml(t.summary || t.title || '')}</div>
+        </div>
+        ${camHtml}
+      </div>
+      ${impactHtml}
+    </div>`;
+  }).join('');
+  lastTopIds = newIds;
+  // Click to fly the map; clicking the thumb opens the camera modal
+  el.querySelectorAll('.top-item').forEach(node => {
+    node.addEventListener('click', (e) => {
+      const thumb = e.target.closest('.cam-thumb');
+      if (thumb) {
+        e.stopPropagation();
+        openCamModal(thumb.dataset.cam, thumb.dataset.name);
+        return;
+      }
+      const lat = parseFloat(node.dataset.lat);
+      const lon = parseFloat(node.dataset.lon);
+      if (!isNaN(lat) && !isNaN(lon)) {
+        map.flyTo([lat, lon], 13, { duration: 0.6 });
+      }
+    });
+  });
+}
+
+function renderTowns(towns) {
+  const el = document.getElementById('towns');
+  // Group by region in NAR-natural order: South, East, North
+  const groups = {};
+  for (const t of towns) (groups[t.region] = groups[t.region] || []).push(t);
+
+  let html = '';
+  for (const r of REGION_ORDER) {
+    const list = groups[r] || [];
+    if (!list.length) continue;
+    html += `<div class="region-label mono">${r} Ayrshire</div>`;
+    // Sort: red first, then amber, then info, then clear; then by count desc
+    list.sort((a, b) => {
+      const order = { red: 0, amber: 1, info: 2, clear: 3 };
+      return order[a.status] - order[b.status] || b.count - a.count;
+    });
+    for (const t of list) {
+      html += `<div class="town ${t.status}">
+        <span class="name">${t.town}</span>
+        <span class="count mono">${t.count}</span>
+      </div>`;
+    }
+  }
+  el.innerHTML = html;
+}
+
+function renderTrunk(trunk) {
+  const el = document.getElementById('trunk');
+  const html = trunk.map(r => {
+    const stats = [];
+    if (r.incidents) stats.push(`${r.incidents} live`);
+    if (r.roadworks) stats.push(`${r.roadworks} wrk`);
+    if (r.delayed_segments) stats.push(`<span class="seg-pct">${r.delayed_segments}/${r.total_segments}</span>`);
+    if (!stats.length) stats.push('clear');
+
+    let delayHtml = '';
+    if (r.delay_min && r.delay_min > 0.5) {
+      const cls = r.delay_min >= 5 ? 'hot' : r.delay_min >= 1.5 ? 'warm' : '';
+      delayHtml = `<span class="delay ${cls}">+${r.delay_min}m</span>`;
+    }
+    return `<div class="trunk-card ${r.status}" data-road="${r.road}">
+      <div class="road-row">
+        <div class="road-wrap"><span class="status-dot"></span><span class="road">${r.road}</span></div>
+        ${delayHtml}
+      </div>
+      <div class="stats mono">${stats.join(' · ')}</div>
+    </div>`;
+  }).join('');
+  el.innerHTML = html;
+  el.querySelectorAll('.trunk-card').forEach(node => {
+    node.addEventListener('click', () => openRoadPanel(node.dataset.road));
+  });
+}
+
+function renderDelays(delays) {
+  const el = document.getElementById('delays');
+  document.getElementById('delay-count').textContent = delays.length ? `${delays.length} segments` : 'none';
+  if (!delays.length) {
+    el.innerHTML = '<div style="padding:10px 12px;color:var(--muted);font-size:11px">All clear on trunk routes</div>';
+    return;
+  }
+  el.innerHTML = delays.map(d => {
+    const cls = d.delay_min >= 5 ? 'hot' : d.delay_min >= 1.5 ? 'warm' : '';
+    const cam = (d.cameras && d.cameras[0]) || null;
+    const withThumb = cam ? 'with-thumb' : '';
+    const thumbHtml = cam
+      ? `<img class="cam-thumb" src="${camUrl(cam.url)}" alt="${escapeAttr(cam.name)}" data-cam="${escapeAttr(cam.url)}" data-name="${escapeAttr(cam.name)}">`
+      : '';
+    let causesHtml = '';
+    if (d.caused_by && d.caused_by.length) {
+      causesHtml = `<div class="causes-strip" style="grid-column:1 / -1">${
+        d.caused_by.slice(0, 2).map(c =>
+          `<span class="cause ${c.confidence}"><span class="conf">${c.confidence}</span>${escapeHtml((c.summary || '').replace(/^\[(RED|AMBER)\]\s*/i,'').slice(0, 90))}<span class="dist">${c.distance_km}km</span></span>`
+        ).join('')
+      }</div>`;
+    }
+    return `<div class="delay-item ${cls} ${withThumb}" data-lat="${d.lat || ''}" data-lon="${d.lon || ''}">
+      <div class="road">${d.road}</div>
+      <div class="seg">${escapeHtml(stripRoadPrefix(d.name, d.road))}<span class="status">${escapeHtml(d.status || '')}</span></div>
+      <div class="delta">+${d.delay_min}m</div>
+      ${thumbHtml}
+      ${causesHtml}
+    </div>`;
+  }).join('');
+  el.querySelectorAll('.delay-item').forEach(node => {
+    node.addEventListener('click', (e) => {
+      const thumb = e.target.closest('.cam-thumb');
+      if (thumb) {
+        e.stopPropagation();
+        openCamModal(thumb.dataset.cam, thumb.dataset.name);
+        return;
+      }
+      const lat = parseFloat(node.dataset.lat);
+      const lon = parseFloat(node.dataset.lon);
+      if (!isNaN(lat) && !isNaN(lon)) map.flyTo([lat, lon], 13, { duration: 0.6 });
+    });
+  });
+}
+
+function renderCamCarousel(cams) {
+  const rail = document.getElementById('cams-rail');
+  document.getElementById('cams-count').textContent = cams.length ? `${cams.length} feeds` : '—';
+  if (!cams.length) {
+    rail.innerHTML = '<div style="color:var(--muted);font-size:11px;letter-spacing:1.5px;padding:30px 0;text-transform:uppercase;">No active disruption — cameras idle</div>';
+    return;
+  }
+  rail.innerHTML = cams.map(c => `
+    <div class="cam-card" data-cam="${escapeAttr(c.url)}" data-name="${escapeAttr(c.name)}" data-lat="${c.lat || ''}" data-lon="${c.lon || ''}">
+      <div class="img-wrap">
+        <img src="${camUrl(c.url)}" alt="${escapeAttr(c.name)}" loading="lazy">
+        <div class="live-dot"></div>
+      </div>
+      <div class="meta">
+        <div class="name">${escapeHtml(c.name)}</div>
+        <div class="reason">near ${escapeHtml(c.reason || '')}</div>
+      </div>
+    </div>
+  `).join('');
+  rail.querySelectorAll('.cam-card').forEach(node => {
+    node.addEventListener('click', () => {
+      openCamModal(node.dataset.cam, node.dataset.name);
+    });
+  });
+}
+
+function renderCamerasOnMap(cams) {
+  cameraLayer.clearLayers();
+  if (!camsVisible) return;
+  for (const c of cams) {
+    if (c.lat == null || c.lon == null) continue;
+    const m = L.marker([c.lat, c.lon], {
+      icon: L.divIcon({
+        className: '',
+        html: '<div class="pin" style="background:#60a5fa"></div>',
+        iconSize: [10, 10], iconAnchor: [5, 5],
+      }),
+    });
+    m.bindPopup(
+      `<strong>${escapeHtml(c.name)}</strong><br>` +
+      `<img src="${camUrl(c.url)}" style="width:240px;margin-top:6px;border:1px solid #1f1f24" alt="">`,
+      { maxWidth: 280 }
+    );
+    cameraLayer.addLayer(m);
+  }
+}
+
+function camUrl(url) {
+  // Cache-bust so images update on next data refresh
+  const sep = url.includes('?') ? '&' : '?';
+  return `${url}${sep}t=${camRefreshKey}`;
+}
+
+let camModalRefreshTimer = null;
+let camModalUrl = null;
+
+function openCamModal(url, name) {
+  camModalUrl = url;
+  const modal = document.getElementById('cam-modal');
+  const img = document.getElementById('cam-modal-img');
+  document.getElementById('cam-modal-name').textContent = name || '—';
+  img.src = camUrl(url);
+  bumpCamModalClock();
+  modal.classList.add('on');
+
+  if (camModalRefreshTimer) clearInterval(camModalRefreshTimer);
+  camModalRefreshTimer = setInterval(() => {
+    if (!camModalUrl) return;
+    img.src = `${camModalUrl}${camModalUrl.includes('?') ? '&' : '?'}t=${Date.now()}`;
+    bumpCamModalClock();
+  }, 30_000);
+}
+
+function bumpCamModalClock() {
+  const now = new Date();
+  const hh = String(now.getHours()).padStart(2, '0');
+  const mm = String(now.getMinutes()).padStart(2, '0');
+  const ss = String(now.getSeconds()).padStart(2, '0');
+  document.getElementById('cam-modal-clock').textContent = `${hh}:${mm}:${ss}`;
+  document.getElementById('cam-modal-updated').textContent = ` · updated ${hh}:${mm}`;
+}
+
+function closeCamModal() {
+  document.getElementById('cam-modal').classList.remove('on');
+  if (camModalRefreshTimer) {
+    clearInterval(camModalRefreshTimer);
+    camModalRefreshTimer = null;
+  }
+  camModalUrl = null;
+}
+
+// Click outside the frame closes; clicks inside the frame don't bubble out
+document.getElementById('cam-modal').addEventListener('click', (e) => {
+  if (e.target.id === 'cam-modal') closeCamModal();
+});
+document.getElementById('cam-modal-close').addEventListener('click', closeCamModal);
+
+function stripRoadPrefix(name, road) {
+  if (!name) return '';
+  // "A77 junction 28 to 29" → "junction 28 to 29"
+  if (road && name.toUpperCase().startsWith(road.toUpperCase())) {
+    return name.slice(road.length).trim();
+  }
+  return name;
+}
+
+function renderHeatmap(points) {
+  if (heatLayer) {
+    map.removeLayer(heatLayer);
+    heatLayer = null;
+  }
+  if (!points.length || !heatVisible) return;
+  heatLayer = L.heatLayer(points, {
+    radius: 22,
+    blur: 18,
+    maxZoom: 14,
+    minOpacity: 0.4,
+    gradient: {
+      0.0: '#34d399',  // green
+      0.3: '#fbbf24',  // amber
+      0.6: '#f87171',  // red
+      1.0: '#dc2626',
+    },
+  }).addTo(map);
+}
+
+function renderVms(vms) {
+  const rail = document.getElementById('vms-rail');
+  if (!vms || !vms.length) {
+    rail.innerHTML = '<span class="vms-msg" style="color:var(--muted)">No active VMS messages</span>';
+    rail.style.animation = 'none';
+    rail.style.transform = 'translateX(0)';
+    return;
+  }
+  // Duplicate the list so the marquee can loop seamlessly with -50% translate
+  const html = vms.map(v =>
+    `<span class="vms-msg"><span class="road">${escapeHtml(v.road || '')}</span>${escapeHtml(v.message)}</span>`
+  ).join('');
+  rail.innerHTML = html + html;
+
+  // Measure actual rail width and target a constant pixel speed (~70 px/s).
+  // This keeps reading speed stable regardless of how many / how long the
+  // messages are, instead of jittering when content density changes.
+  requestAnimationFrame(() => {
+    const oneCopyPx = rail.scrollWidth / 2;
+    const SPEED_PX_PER_SEC = 70;
+    const dur = Math.max(30, oneCopyPx / SPEED_PX_PER_SEC);
+    rail.style.animation = 'none';
+    // Force reflow so the new animation restarts cleanly
+    void rail.offsetWidth;
+    rail.style.animation = `vmsScroll ${dur}s linear infinite`;
+  });
+}
+
+function renderMap(top) {
+  markersLayer.clearLayers();
+  if (!pinsVisible) return;
+  for (const t of top) {
+    if (t.lat == null || t.lon == null) continue;
+    const m = L.marker([t.lat, t.lon], { icon: pinIcon(t.severity, t.type) });
+    m.bindPopup(`<strong>${escapeHtml(t.road || t.town || t.type)}</strong><br>${escapeHtml(t.summary || t.title || '')}`);
+    markersLayer.addLayer(m);
+  }
+}
+
+// Map control toggles
+document.getElementById('toggle-heat').addEventListener('click', (e) => {
+  heatVisible = !heatVisible;
+  e.currentTarget.classList.toggle('on', heatVisible);
+  if (lastStudioData) renderHeatmap(lastStudioData.heatmap || []);
+});
+document.getElementById('toggle-pins').addEventListener('click', (e) => {
+  pinsVisible = !pinsVisible;
+  e.currentTarget.classList.toggle('on', pinsVisible);
+  if (lastStudioData) renderMap(lastStudioData.top || []);
+});
+document.getElementById('toggle-cams').addEventListener('click', (e) => {
+  camsVisible = !camsVisible;
+  e.currentTarget.classList.toggle('on', camsVisible);
+  if (camsVisible) cameraLayer.addTo(map);
+  else map.removeLayer(cameraLayer);
+  if (lastStudioData) renderCamerasOnMap(lastStudioData.cameras_all || []);
+});
+document.getElementById('toggle-buses').addEventListener('click', (e) => {
+  busesVisible = !busesVisible;
+  e.currentTarget.classList.toggle('on', busesVisible);
+  if (busesVisible) {
+    busLayer.addTo(map);
+    refreshBuses();
+  } else {
+    map.removeLayer(busLayer);
+  }
+});
+document.getElementById('toggle-trains').addEventListener('click', (e) => {
+  trainsVisible = !trainsVisible;
+  e.currentTarget.classList.toggle('on', trainsVisible);
+  if (trainsVisible) {
+    trainLayer.addTo(map);
+    refreshTrains();
+  } else {
+    map.removeLayer(trainLayer);
+  }
+});
+setInterval(refreshBuses, BUS_REFRESH_MS);
+
+let lastStudioData = null;
+
+function escapeHtml(s) {
+  return String(s ?? '').replace(/[&<>"']/g, c => ({
+    '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+  }[c]));
+}
+function escapeAttr(s) { return escapeHtml(s).replace(/`/g, '&#96;'); }
+
+function safeRender(name, fn) {
+  try { fn(); } catch (e) { console.error('[render]', name, e); }
+}
+
+// ─── Bus + train layers ──────────────────────────────────────────────────
+function busIcon(colour, heading) {
+  const fill = (colour && /^#?[0-9a-f]{6}$/i.test(colour)) ? colour : '#ffcb43';
+  return L.divIcon({
+    className: '',
+    html: `<div class="bus-marker" style="transform: rotate(${heading || 0}deg)">
+      <svg width="18" height="18" viewBox="0 0 18 18">
+        <path d="M9 1 L15 16 L9 12 L3 16 Z" fill="${fill}" stroke="#0a0a0b" stroke-width="1" stroke-linejoin="round"/>
+      </svg>
+    </div>`,
+    iconSize: [18, 18], iconAnchor: [9, 9],
+  });
+}
+
+function trainIcon(state) {
+  return L.divIcon({
+    className: '',
+    html: `<div class="train-marker ${state || ''}">⛁</div>`,
+    iconSize: [18, 18], iconAnchor: [9, 9],
+  });
+}
+
+async function refreshBuses() {
+  if (!busesVisible) return;
+  try {
+    const r = await fetch('/api/buses', { cache: 'no-store' });
+    if (!r.ok) return;
+    const d = await r.json();
+    busLayer.clearLayers();
+    for (const b of (d.buses || [])) {
+      const m = L.marker([b.lat, b.lon], { icon: busIcon(b.colour, b.heading) });
+      m.bindPopup(
+        `<strong style="color:${b.colour||'#ffcb43'}">${escapeHtml(b.line || '?')}</strong> → ${escapeHtml(b.destination || '')}<br>` +
+        `<span style="color:#8a8a90;font-size:10px">${escapeHtml(b.vehicle || '')}</span>`,
+        { maxWidth: 240 }
+      );
+      busLayer.addLayer(m);
+    }
+  } catch (e) { console.error('[buses]', e); }
+}
+
+async function refreshTrains() {
+  if (!trainsVisible) return;
+  try {
+    const r = await fetch('/api/trains/stations', { cache: 'no-store' });
+    if (!r.ok) return;
+    const d = await r.json();
+    trainLayer.clearLayers();
+    for (const s of (d.stations || [])) {
+      const m = L.marker([s.lat, s.lon], { icon: trainIcon('') });
+      m.bindPopup(
+        `<strong>${escapeHtml(s.name)}</strong> <span style="color:#8a8a90;font-family:monospace;font-size:10px">${s.crs}</span>` +
+        `<div style="font-size:10px;color:#8a8a90;margin-top:4px">Click for departures</div>`,
+        { maxWidth: 240 }
+      );
+      m.on('click', () => openTrainBoard(s.crs, s.name));
+      trainLayer.addLayer(m);
+    }
+  } catch (e) { console.error('[trains]', e); }
+}
+
+async function openTrainBoard(crs, name) {
+  clearRoadFocus();
+  const panel = document.getElementById('road-panel');
+  const code = document.getElementById('rp-code');
+  const status = document.getElementById('rp-status');
+  const headline = document.getElementById('rp-headline');
+  const body = document.getElementById('rp-body');
+  panel.className = 'on';
+  code.textContent = crs;
+  code.style.fontSize = '24px';
+  status.textContent = 'Train station';
+  headline.textContent = name;
+  body.innerHTML = '<div class="rp-empty">Loading departures…</div>';
+  panel.classList.add('on');
+
+  try {
+    const r = await fetch(`/api/trains/board/${encodeURIComponent(crs)}`, { cache: 'no-store' });
+    const d = await r.json();
+    const renderDir = (dir, label) => {
+      const deps = (d[dir] && d[dir].departures) || [];
+      if (!deps.length) return `<div class="rp-section"><h4>${label}<span class="n">no departures</span></h4></div>`;
+      const rows = deps.slice(0, 8).map(t => {
+        const onTime = (t.expected || '').toLowerCase() === 'on time';
+        const cancelled = !!t.cancelled;
+        const delay = t.delay_mins || 0;
+        const cls = cancelled ? 'red' : (delay > 0 ? 'amber' : '');
+        const expectedDisp = cancelled ? 'CANCELLED' : (onTime ? 'On Time' : (t.expected || ''));
+        return `<div class="rp-row ${cls}">
+          <div>
+            <div class="label"><strong style="font-family:'JetBrains Mono',monospace">${escapeHtml(t.scheduled || '—')}</strong> → ${escapeHtml(t.destination || '')}</div>
+            <div class="meta">Platform ${escapeHtml(t.platform || '—')} · ${escapeHtml(expectedDisp)}</div>
+          </div>
+          <div class="delta">${cancelled ? '✕' : (delay > 0 ? `+${delay}m` : '✓')}</div>
+        </div>`;
+      }).join('');
+      return `<div class="rp-section"><h4>${label}<span class="n">${deps.length} services</span></h4>${rows}</div>`;
+    };
+    body.innerHTML = renderDir('northbound', 'Northbound') + renderDir('southbound', 'Southbound');
+  } catch (e) {
+    body.innerHTML = '<div class="rp-empty">Could not load departures</div>';
+  }
+}
+
+// ─── Road drilldown panel ────────────────────────────────────────────────
+async function openRoadPanel(code) {
+  const panel = document.getElementById('road-panel');
+  const codeEl = document.getElementById('rp-code');
+  const statusEl = document.getElementById('rp-status');
+  const headlineEl = document.getElementById('rp-headline');
+  const body = document.getElementById('rp-body');
+  codeEl.textContent = code;
+  codeEl.style.fontSize = '36px';
+  panel.className = 'on';
+  statusEl.textContent = 'loading…';
+  headlineEl.textContent = '';
+  body.innerHTML = '<div class="rp-empty">Loading road detail…</div>';
+  panel.classList.add('on');
+
+  try {
+    const r = await fetch(`/api/road/${encodeURIComponent(code)}`, { cache: 'no-store' });
+    const d = await r.json();
+    panel.className = `on ${d.status || ''}`;
+    statusEl.textContent = (d.status || '').toUpperCase() || 'CLEAR';
+    const sum = d.summary || {};
+    const parts = [];
+    if (sum.total_delay_min) parts.push(`<span class="delay">+${sum.total_delay_min}m</span> across ${sum.delayed_segments}/${sum.total_segments} segments`);
+    if (sum.incidents) parts.push(`${sum.incidents} live`);
+    if (sum.roadworks) parts.push(`${sum.roadworks} works`);
+    if (sum.tros)      parts.push(`${sum.tros} orders`);
+    headlineEl.innerHTML = parts.length ? parts.join(' · ') : 'all clear';
+
+    // Fit map to road bbox
+    if (d.bbox) {
+      const b = d.bbox;
+      try {
+        map.fitBounds([[b.south, b.west], [b.north, b.east]], { padding: [60, 60], duration: 0.6 });
+      } catch {}
+    }
+
+    // Draw road highlight + apply focus dimming
+    applyRoadFocus(code, d.geometry || [], d.status, d.hot_geometry || []);
+
+    body.innerHTML = renderRoadDetail(d);
+    body.querySelectorAll('[data-flyto]').forEach(node => {
+      node.addEventListener('click', () => {
+        const [lat, lon] = node.dataset.flyto.split(',').map(parseFloat);
+        if (!isNaN(lat) && !isNaN(lon)) map.flyTo([lat, lon], 14, { duration: 0.5 });
+      });
+    });
+    body.querySelectorAll('.rp-cam').forEach(node => {
+      node.addEventListener('click', () => openCamModal(node.dataset.cam, node.dataset.name));
+    });
+  } catch (e) {
+    body.innerHTML = '<div class="rp-empty">Could not load road detail</div>';
+    console.error('[road]', e);
+  }
+}
+
+function renderRoadDetail(d) {
+  const sec = (title, items, n) =>
+    `<div class="rp-section"><h4>${title}<span class="n">${n ?? items.length}</span></h4>${items.length ? items.join('') : '<div class="rp-empty">— none —</div>'}</div>`;
+
+  const segHtml = (d.segments || []).map(s => {
+    const cls = s.delay_min >= 5 ? 'red' : s.delay_min >= 1.5 ? 'amber' : '';
+    const stripped = (s.name || '').replace(new RegExp(`^${d.code}\\s*`, 'i'), '');
+    return `<div class="rp-row ${cls}" data-flyto="${s.lat || ''},${s.lon || ''}">
+      <div>
+        <div class="label">${escapeHtml(stripped || s.name || '')}</div>
+        <div class="meta">${escapeHtml(s.status || '—')} · now ${s.current_min}m · free flow ${s.freeflow_min}m</div>
+      </div>
+      <div class="delta">+${s.delay_min}m</div>
+    </div>`;
+  });
+
+  const itemHtml = (it) => {
+    const sev = (it.severity || '').toLowerCase();
+    const cls = sev === 'red' ? 'red' : sev === 'amber' ? 'amber' : '';
+    const summary = (it.summary || it.title || '').replace(/^\[(RED|AMBER)\]\s*/i, '');
+    return `<div class="rp-row ${cls}" data-flyto="${it.lat || ''},${it.lon || ''}">
+      <div>
+        <div class="label">${escapeHtml(summary)}</div>
+        <div class="meta">${escapeHtml((it.town || it.source || '').toString())}</div>
+      </div>
+      <div class="delta" style="font-size:9px;letter-spacing:1.5px;color:var(--muted)">${escapeHtml((it.severity || '').toUpperCase())}</div>
+    </div>`;
+  };
+
+  const camHtml = (c) =>
+    `<div class="rp-cam" data-cam="${escapeAttr(c.url)}" data-name="${escapeAttr(c.name)}">
+      <img src="${camUrl(c.url)}" alt="${escapeAttr(c.name)}">
+      <div class="meta">${escapeHtml(c.name)}<span class="d">${c.distance_km} km</span></div>
+    </div>`;
+
+  return [
+    segHtml.length ? sec(`Travel-time segments`, segHtml) : '',
+    (d.incidents || []).length ? sec(`Incidents`, d.incidents.map(itemHtml)) : '',
+    (d.roadworks || []).length ? sec(`Roadworks`, d.roadworks.map(itemHtml)) : '',
+    (d.tros || []).length ? sec(`Traffic orders`, d.tros.map(itemHtml)) : '',
+    (d.vms || []).length ? sec(`VMS messages`, d.vms.map(itemHtml)) : '',
+    (d.cameras || []).length ? `<div class="rp-section"><h4>Nearby cameras<span class="n">${d.cameras.length}</span></h4><div class="rp-cams">${d.cameras.map(camHtml).join('')}</div></div>` : '',
+  ].filter(Boolean).join('');
+}
+
+function applyRoadFocus(code, geometry, status, hotGeometry) {
+  // Clear any prior highlight
+  roadHighlightLayer.clearLayers();
+
+  const STATUS_COLOUR = { red: '#f87171', amber: '#fbbf24', green: '#34d399' };
+  const hotColour = STATUS_COLOUR[status] || '#ff5722';
+  const baseColour = '#ff5722'; // accent — the road's identity, regardless of status
+
+  // 1. Base layer: full pre-baked OSM road shape (subtle, always orange)
+  //    Wide soft halo + thinner crisp stroke
+  for (const line of (geometry || [])) {
+    if (!line || line.length < 2) continue;
+    L.polyline(line, {
+      pane: 'roadHighlightGlow',
+      color: baseColour, weight: 12, opacity: 0.10,
+      lineCap: 'round', lineJoin: 'round',
+      interactive: false,
+    }).addTo(roadHighlightLayer);
+    L.polyline(line, {
+      pane: 'roadHighlight',
+      color: baseColour, weight: 3, opacity: 0.55,
+      lineCap: 'round', lineJoin: 'round',
+      interactive: false,
+    }).addTo(roadHighlightLayer);
+  }
+
+  // 2. Hot zones: TomTom incident polylines, bright + status-coloured, on top
+  for (const line of (hotGeometry || [])) {
+    if (!line || line.length < 2) continue;
+    L.polyline(line, {
+      pane: 'roadHighlightGlow',
+      color: hotColour, weight: 18, opacity: 0.22,
+      lineCap: 'round', lineJoin: 'round',
+      interactive: false,
+    }).addTo(roadHighlightLayer);
+    L.polyline(line, {
+      pane: 'roadHighlight',
+      color: hotColour, weight: 6, opacity: 0.95,
+      lineCap: 'round', lineJoin: 'round',
+      interactive: false,
+    }).addTo(roadHighlightLayer);
+  }
+
+  if (!map.hasLayer(roadHighlightLayer)) roadHighlightLayer.addTo(map);
+
+  // Dim everything else
+  document.querySelector('.leaflet-container').classList.add('road-focus');
+
+  // Show the focus chip with hot-zone count if any
+  const tag = document.getElementById('rfc-tag');
+  tag.textContent = code;
+  const chip = document.getElementById('road-focus-chip');
+  chip.classList.add('on');
+}
+
+function clearRoadFocus() {
+  roadHighlightLayer.clearLayers();
+  if (map.hasLayer(roadHighlightLayer)) map.removeLayer(roadHighlightLayer);
+  const lc = document.querySelector('.leaflet-container');
+  if (lc) lc.classList.remove('road-focus');
+  document.getElementById('road-focus-chip').classList.remove('on');
+}
+
+// Hook clear into both close paths (button + ESC)
+document.getElementById('rp-close').addEventListener('click', () => {
+  document.getElementById('road-panel').classList.remove('on');
+  clearRoadFocus();
+});
+document.getElementById('rfc-clear').addEventListener('click', () => {
+  document.getElementById('road-panel').classList.remove('on');
+  clearRoadFocus();
+});
+
+// ESC closes the panel
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') {
+    document.getElementById('road-panel').classList.remove('on');
+    closeCamModal();
+    clearRoadFocus();
+  }
+});
+
+// ─── Weather + warnings ──────────────────────────────────────────────────
+const WMO = {
+  0:['Clear','☀'], 1:['Mainly clear','🌤'], 2:['Partly cloudy','⛅'], 3:['Overcast','☁'],
+  45:['Fog','🌫'], 48:['Rime fog','🌫'],
+  51:['Light drizzle','🌦'], 53:['Drizzle','🌦'], 55:['Heavy drizzle','🌦'],
+  61:['Light rain','🌧'], 63:['Rain','🌧'], 65:['Heavy rain','🌧'],
+  66:['Freezing rain','🌧❄'], 67:['Heavy freezing rain','🌧❄'],
+  71:['Light snow','🌨'], 73:['Snow','🌨'], 75:['Heavy snow','🌨'],
+  77:['Snow grains','🌨'], 80:['Rain showers','🌦'], 81:['Heavy showers','🌦'], 82:['Violent showers','⛈'],
+  85:['Snow showers','🌨'], 86:['Heavy snow showers','🌨'],
+  95:['Thunderstorm','⛈'], 96:['Storm w/ hail','⛈'], 99:['Severe storm','⛈'],
+};
+const WEATHER_REFRESH_MS = 600_000; // 10 min
+
+function compass(deg) {
+  if (deg == null) return '';
+  const dirs = ['N','NE','E','SE','S','SW','W','NW'];
+  return dirs[Math.round((deg % 360) / 45) % 8];
+}
+
+async function refreshWeather() {
+  try {
+    const r = await fetch('/api/weather', { cache: 'no-store' });
+    const d = await r.json();
+    const code = d.wmo_code;
+    const [label, icon] = WMO[code] || ['—',''];
+    const tempEl = document.getElementById('wx-temp');
+    const condEl = document.getElementById('wx-cond');
+    const windEl = document.getElementById('wx-wind');
+    if (d.temp_c != null) tempEl.textContent = `${d.temp_c.toFixed(0)}°`;
+    condEl.textContent = label;
+    if (d.wind_mph != null) {
+      const gust = d.gust_mph && d.gust_mph > d.wind_mph + 3 ? `–${d.gust_mph.toFixed(0)}` : '';
+      windEl.textContent = `${compass(d.wind_dir)} ${d.wind_mph.toFixed(0)}${gust}mph`;
+    }
+    const pill = document.getElementById('weather-pill');
+    pill.classList.remove('warn', 'bad');
+    if (d.wind_mph >= 35 || (d.precip_mm && d.precip_mm >= 4)) pill.classList.add('warn');
+    if (d.gust_mph >= 55) pill.classList.add('bad');
+    pill.title = `${label} · ${d.temp_c?.toFixed(1)}° (feels ${d.feels_c?.toFixed(1)}°) · click for detail`;
+
+    // Detail popover
+    const dl = document.getElementById('wx-detail');
+    dl.innerHTML = `
+      <dt>Condition</dt><dd>${escapeHtml(label)} ${icon}</dd>
+      <dt>Temp</dt><dd>${d.temp_c?.toFixed(1) ?? '—'} °C</dd>
+      <dt>Feels like</dt><dd>${d.feels_c?.toFixed(1) ?? '—'} °C</dd>
+      <dt>Humidity</dt><dd>${d.humidity ?? '—'} %</dd>
+      <dt>Wind</dt><dd>${compass(d.wind_dir)} ${d.wind_mph?.toFixed(0) ?? '—'} mph</dd>
+      <dt>Gusts</dt><dd>${d.gust_mph?.toFixed(0) ?? '—'} mph</dd>
+      <dt>Precip</dt><dd>${d.precip_mm?.toFixed(1) ?? '0.0'} mm</dd>
+      <dt>Cloud</dt><dd>${d.cloud_pct ?? '—'} %</dd>
+      <dt>Visibility</dt><dd>${d.visibility_m ? (d.visibility_m/1000).toFixed(1) : '—'} km</dd>
+      <dt>Pressure</dt><dd>${d.pressure_hpa?.toFixed(0) ?? '—'} hPa</dd>
+    `;
+  } catch (e) { console.error('[weather]', e); }
+}
+
+document.getElementById('weather-pill').addEventListener('click', () => {
+  document.getElementById('weather-pop').classList.toggle('on');
+});
+document.addEventListener('click', (e) => {
+  if (!e.target.closest('.weather-pill') && !e.target.closest('#weather-pop')) {
+    document.getElementById('weather-pop').classList.remove('on');
+  }
+});
+
+async function refreshWarnings() {
+  try {
+    const r = await fetch('/api/warnings', { cache: 'no-store' });
+    const d = await r.json();
+    const bar = document.getElementById('warning-bar');
+    const all = [...(d.met_office || []).map(w => ({...w, source: 'Met Office'})),
+                 ...(d.floods || []).map(w => ({...w, source: 'SEPA flood'}))];
+    if (!all.length) {
+      bar.classList.remove('on', 'amber', 'red');
+      return;
+    }
+    // Pick worst severity
+    const sevRank = { red: 3, amber: 2, yellow: 1 };
+    all.sort((a, b) => (sevRank[(b.severity||'').toLowerCase()]||0) - (sevRank[(a.severity||'').toLowerCase()]||0));
+    const top = all[0];
+    const sev = (top.severity || top.level || 'amber').toLowerCase();
+    bar.classList.add('on');
+    bar.classList.remove('amber','red');
+    bar.classList.add(sev === 'red' ? 'red' : 'amber');
+    const title = top.headline || top.title || top.summary || top.event || 'Weather warning';
+    const meta = [top.source, top.severity, top.region, top.until || top.ends].filter(Boolean).join(' · ');
+    bar.innerHTML = `
+      <span class="icon">⚠</span>
+      <span class="badge">${escapeHtml((top.severity || sev).toUpperCase())}</span>
+      <span class="body">${escapeHtml(title)}${all.length > 1 ? ` · +${all.length - 1} more` : ''}</span>
+      <span style="font-family:'JetBrains Mono',monospace;color:var(--muted);font-size:10px">${escapeHtml(meta)}</span>
+    `;
+  } catch (e) { console.error('[warnings]', e); }
+}
+
+// ─── New-red chime + screen flash ────────────────────────────────────────
+let chimeOn = false;
+let prevRedIds = new Set();
+let firstLoad = true;
+const chimeBtn = document.getElementById('btn-chime');
+chimeBtn.addEventListener('click', () => {
+  chimeOn = !chimeOn;
+  chimeBtn.classList.toggle('on', chimeOn);
+  chimeBtn.classList.toggle('muted', !chimeOn);
+  chimeBtn.title = `Chime on new red alerts (currently ${chimeOn ? 'ON' : 'OFF'})`;
+});
+
+function playChime() {
+  // Subtle two-tone synthetic tick using Web Audio API — no external file needed
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const now = ctx.currentTime;
+    [880, 1320].forEach((freq, i) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'sine'; osc.frequency.value = freq;
+      gain.gain.setValueAtTime(0, now + i*0.16);
+      gain.gain.linearRampToValueAtTime(0.18, now + i*0.16 + 0.02);
+      gain.gain.linearRampToValueAtTime(0, now + i*0.16 + 0.4);
+      osc.connect(gain); gain.connect(ctx.destination);
+      osc.start(now + i*0.16); osc.stop(now + i*0.16 + 0.42);
+    });
+  } catch (e) { /* no audio context — ignore */ }
+}
+
+function checkForNewRed(top) {
+  const currentRedIds = new Set(top.filter(t => (t.severity || '').toLowerCase() === 'red').map(t => t.id));
+  if (!firstLoad) {
+    const newOnes = [...currentRedIds].filter(id => !prevRedIds.has(id));
+    if (newOnes.length > 0) {
+      // Visual flash always; audio only if user opted in
+      document.body.classList.add('flash-red');
+      setTimeout(() => document.body.classList.remove('flash-red'), 1500);
+      if (chimeOn) playChime();
+    }
+  }
+  prevRedIds = currentRedIds;
+  firstLoad = false;
+}
+
+// ─── Closures calendar slide-over ────────────────────────────────────────
+async function openCalendar() {
+  clearRoadFocus();
+  const panel = document.getElementById('road-panel');
+  const codeEl = document.getElementById('rp-code');
+  const statusEl = document.getElementById('rp-status');
+  const headlineEl = document.getElementById('rp-headline');
+  const body = document.getElementById('rp-body');
+  codeEl.textContent = '📅';
+  codeEl.style.fontSize = '28px';
+  panel.className = 'on';
+  statusEl.textContent = '7-DAY OUTLOOK';
+  headlineEl.textContent = 'Roadworks starting / ending';
+  body.innerHTML = '<div class="rp-empty">Loading calendar…</div>';
+  panel.classList.add('on');
+  try {
+    const r = await fetch('/api/closures-calendar', { cache: 'no-store' });
+    const d = await r.json();
+    body.innerHTML = (d.days || []).map(day => {
+      const today = new Date().toISOString().slice(0, 10);
+      const isToday = day.date === today;
+      const sections = [];
+      if (day.starts && day.starts.length) {
+        sections.push(`<div style="margin-bottom:6px"><span style="color:var(--bad);font-family:'JetBrains Mono',monospace;font-size:9px;letter-spacing:1.5px;text-transform:uppercase">▶ Starting</span>` +
+          day.starts.slice(0, 5).map(s => `<div class="rp-row" data-flyto="${s.lat || ''},${s.lon || ''}"><div><div class="label">${escapeHtml((s.title||'').slice(0,90))}</div><div class="meta">${escapeHtml((s.description||'').slice(0,60))}</div></div></div>`).join('') + `</div>`);
+      }
+      if (day.ends && day.ends.length) {
+        sections.push(`<div style="margin-bottom:6px"><span style="color:var(--good);font-family:'JetBrains Mono',monospace;font-size:9px;letter-spacing:1.5px;text-transform:uppercase">■ Ending</span>` +
+          day.ends.slice(0, 5).map(s => `<div class="rp-row" data-flyto="${s.lat || ''},${s.lon || ''}"><div><div class="label">${escapeHtml((s.title||'').slice(0,90))}</div><div class="meta">${escapeHtml((s.description||'').slice(0,60))}</div></div></div>`).join('') + `</div>`);
+      }
+      if (!sections.length) sections.push('<div class="rp-empty" style="font-size:10px">— no schedule changes —</div>');
+      return `<div class="rp-section">
+        <h4>${day.weekday} <span style="color:var(--fg-soft);margin-left:4px">${day.date.slice(8)}/${day.date.slice(5,7)}</span>${isToday ? ' <span style="color:var(--accent);font-size:9px;margin-left:6px">TODAY</span>' : ''}<span class="n">${day.active_count} active</span></h4>
+        ${sections.join('')}
+      </div>`;
+    }).join('');
+    body.querySelectorAll('[data-flyto]').forEach(node => {
+      node.addEventListener('click', () => {
+        const [lat, lon] = node.dataset.flyto.split(',').map(parseFloat);
+        if (!isNaN(lat) && !isNaN(lon)) map.flyTo([lat, lon], 13, { duration: 0.5 });
+      });
+    });
+  } catch (e) {
+    body.innerHTML = '<div class="rp-empty">Could not load calendar</div>';
+    console.error('[calendar]', e);
+  }
+}
+
+document.getElementById('btn-calendar').addEventListener('click', openCalendar);
+
+// ─── Events map layer (Pavilion Festival etc.) ──────────────────────────
+const eventsLayer = L.layerGroup();
+let eventsVisible = false;
+
+async function refreshEvents() {
+  if (!eventsVisible) return;
+  try {
+    const r = await fetch('/api/events', { cache: 'no-store' });
+    const d = await r.json();
+    eventsLayer.clearLayers();
+    for (const ev of (d.events || [])) {
+      if (ev.lat == null || ev.lon == null) continue;
+      const m = L.marker([ev.lat, ev.lon], {
+        icon: L.divIcon({ className: '', html: `<div class="event-marker">🎫</div>`, iconSize: [22, 22], iconAnchor: [11, 11] }),
+      });
+      const startTxt = ev.starts ? new Date(ev.starts).toLocaleString('en-GB', { weekday: 'short', day: '2-digit', month: 'short' }) : '';
+      m.bindPopup(`<strong>${escapeHtml(ev.name)}</strong><br><span style="color:#8a8a90;font-size:10px">${escapeHtml(ev.address || '')}</span>${startTxt ? `<br><span style="font-family:monospace;font-size:10px;color:#a78bfa">${startTxt}</span>` : ''}`, { maxWidth: 280 });
+      eventsLayer.addLayer(m);
+    }
+  } catch (e) { console.error('[events]', e); }
+}
+
+document.getElementById('toggle-events').addEventListener('click', (e) => {
+  eventsVisible = !eventsVisible;
+  e.currentTarget.classList.toggle('on', eventsVisible);
+  if (eventsVisible) {
+    eventsLayer.addTo(map);
+    refreshEvents();
+  } else {
+    map.removeLayer(eventsLayer);
+  }
+});
+
+// ─── Cmd-K search overlay ───────────────────────────────────────────────
+let searchIndex = [];
+let searchActiveIdx = 0;
+
+function buildSearchIndex(d) {
+  const items = [];
+  for (const t of (d.top || [])) {
+    items.push({
+      id: t.id, kind: t.type, severity: t.severity,
+      label: t.summary || t.title || '',
+      meta: [t.road, t.town].filter(Boolean).join(' · '),
+      lat: t.lat, lon: t.lon,
+      road: t.road,
+      blob: `${t.road||''} ${t.town||''} ${t.summary||''} ${t.type||''}`.toLowerCase(),
+    });
+  }
+  for (const w of (d.worst_delays || [])) {
+    items.push({
+      id: w.id, kind: 'delay', severity: w.delay_min >= 5 ? 'red' : 'amber',
+      label: `${w.road} · ${w.name} · +${w.delay_min}m`,
+      meta: `${w.status || ''} · current ${w.current_min}m vs free flow ${w.freeflow_min}m`,
+      lat: w.lat, lon: w.lon, road: w.road,
+      blob: `${w.road||''} ${w.name||''} ${w.status||''} delay`.toLowerCase(),
+    });
+  }
+  for (const r of (d.trunk || [])) {
+    if (r.status === 'green') continue;
+    items.push({
+      id: `trunk-${r.road}`, kind: 'road', severity: r.status,
+      label: `${r.road} — ${r.status.toUpperCase()} · +${r.delay_min}m delay · ${r.delayed_segments}/${r.total_segments} segments slow`,
+      meta: `${r.incidents} live · ${r.roadworks} works`,
+      road: r.road,
+      blob: `${r.road} road delay`.toLowerCase(),
+    });
+  }
+  for (const t of (d.towns || [])) {
+    if (t.status === 'clear') continue;
+    items.push({
+      id: `town-${t.town}`, kind: 'town', severity: t.status === 'red' ? 'red' : t.status === 'amber' ? 'amber' : 'info',
+      label: `${t.town} — ${t.count} item${t.count === 1 ? '' : 's'}`,
+      meta: `${t.region} Ayrshire`,
+      lat: (t.top && t.top[0]) ? t.top[0].lat : null,
+      lon: (t.top && t.top[0]) ? t.top[0].lon : null,
+      blob: `${t.town} ${t.region}`.toLowerCase(),
+    });
+  }
+  searchIndex = items;
+}
+
+function renderSearchResults(q) {
+  const el = document.getElementById('search-results');
+  searchActiveIdx = 0;
+  if (!q) {
+    el.innerHTML = '<div id="search-empty">Type to search across roads, towns, segments, incidents…</div>';
+    return;
+  }
+  const ql = q.toLowerCase();
+  const matches = searchIndex.filter(i => i.blob.includes(ql)).slice(0, 30);
+  if (!matches.length) {
+    el.innerHTML = '<div id="search-empty">No matches</div>';
+    return;
+  }
+  el.innerHTML = matches.map((m, i) => {
+    const sev = (m.severity || '').toLowerCase();
+    const sevCls = ['red','amber'].includes(sev) ? sev : 'info';
+    return `<div class="search-result ${sevCls} ${i === 0 ? 'active' : ''}" data-idx="${i}" data-lat="${m.lat || ''}" data-lon="${m.lon || ''}" data-road="${escapeAttr(m.road || '')}">
+      <span class="badge">${escapeHtml((m.road || m.kind || '').toUpperCase())}</span>
+      <div>
+        <div class="label">${escapeHtml(m.label)}</div>
+        ${m.meta ? `<div class="meta">${escapeHtml(m.meta)}</div>` : ''}
+      </div>
+      <span class="kind">${escapeHtml(m.kind)}</span>
+    </div>`;
+  }).join('');
+  el.querySelectorAll('.search-result').forEach(node => {
+    node.addEventListener('click', () => activateSearchResult(node));
+    node.addEventListener('mouseenter', () => {
+      el.querySelectorAll('.search-result').forEach(n => n.classList.remove('active'));
+      node.classList.add('active');
+      searchActiveIdx = parseInt(node.dataset.idx);
+    });
+  });
+}
+
+function activateSearchResult(node) {
+  const lat = parseFloat(node.dataset.lat);
+  const lon = parseFloat(node.dataset.lon);
+  const road = node.dataset.road;
+  closeSearch();
+  if (road && /^[AM]\d+$/.test(road)) {
+    openRoadPanel(road);
+  } else if (!isNaN(lat) && !isNaN(lon)) {
+    map.flyTo([lat, lon], 13, { duration: 0.5 });
+  }
+}
+
+function openSearch() {
+  document.getElementById('search-modal').classList.add('on');
+  const inp = document.getElementById('search-input');
+  inp.value = '';
+  renderSearchResults('');
+  setTimeout(() => inp.focus(), 50);
+}
+function closeSearch() {
+  document.getElementById('search-modal').classList.remove('on');
+}
+document.getElementById('btn-search').addEventListener('click', openSearch);
+document.getElementById('search-input').addEventListener('input', (e) => renderSearchResults(e.target.value.trim()));
+document.getElementById('search-input').addEventListener('keydown', (e) => {
+  const results = document.querySelectorAll('#search-results .search-result');
+  if (e.key === 'Escape') { closeSearch(); return; }
+  if (e.key === 'Enter') {
+    const active = document.querySelector('#search-results .search-result.active');
+    if (active) activateSearchResult(active);
+    return;
+  }
+  if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+    e.preventDefault();
+    if (!results.length) return;
+    searchActiveIdx = (searchActiveIdx + (e.key === 'ArrowDown' ? 1 : -1) + results.length) % results.length;
+    results.forEach((r, i) => r.classList.toggle('active', i === searchActiveIdx));
+    results[searchActiveIdx].scrollIntoView({ block: 'nearest' });
+  }
+});
+document.addEventListener('keydown', (e) => {
+  if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
+    e.preventDefault();
+    openSearch();
+  }
+});
+document.getElementById('search-modal').addEventListener('click', (e) => {
+  if (e.target.id === 'search-modal') closeSearch();
+});
+
+// ─── Fetch loop ──────────────────────────────────────────────────────────
+async function refresh() {
+  try {
+    const r = await fetch('/api/studio', { cache: 'no-store' });
+    if (!r.ok) throw new Error('http ' + r.status);
+    const d = await r.json();
+    lastStudioData = d;
+    camRefreshKey = Date.now();
+    safeRender('headline', () => renderHeadline(d.headline));
+    safeRender('top',      () => renderTop(d.top));
+    safeRender('delays',   () => renderDelays(d.worst_delays || []));
+    safeRender('towns',    () => renderTowns(d.towns));
+    safeRender('trunk',    () => renderTrunk(d.trunk));
+    safeRender('map',      () => renderMap(d.top));
+    safeRender('heatmap',  () => renderHeatmap(d.heatmap || []));
+    safeRender('vms',      () => renderVms(d.vms || []));
+    safeRender('cams',     () => renderCamCarousel(d.cameras_relevant || []));
+    safeRender('cams-map', () => renderCamerasOnMap(d.cameras_all || []));
+    safeRender('chime',    () => checkForNewRed(d.top || []));
+    safeRender('search-idx', () => buildSearchIndex(d));
+    safeRender('events-map', () => refreshEvents());
+    if (d.data_updated_at) {
+      const dt = new Date(d.data_updated_at);
+      document.getElementById('updated').textContent =
+        `Source updated ${fmtTime(dt)} · refreshes every minute`;
+    }
+  } catch (e) {
+    document.getElementById('updated').textContent = 'Refresh failed — retrying';
+    console.error(e);
+  }
+}
+refresh();
+setInterval(refresh, POLL_MS);
+
+refreshWeather();
+setInterval(refreshWeather, WEATHER_REFRESH_MS);
+refreshWarnings();
+setInterval(refreshWarnings, WEATHER_REFRESH_MS);
+</script>
+</body>
+</html>

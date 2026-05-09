@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>AyrTraffic — Live Ayrshire Traffic</title>
+  <title>AyrTraffic — Central Belt & Ayrshire Traffic</title>
 
   <!-- WispAyr Design System -->
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/WispAyr/wispayr-design@main/css/wispayr.css">
@@ -30,8 +30,13 @@
     }
 
     /* Header adjustments for map app */
-    .w-header { flex-shrink: 0; }
-    .w-footer { display: none; } /* No footer in map app */
+    .w-header { display: none !important; }  /* cross-site nav hidden on traffic — reclaim real estate */
+    .w-footer { display: none !important; } /* No footer in map app */
+
+    /* Defensive full-bleed: kill any white background bleeding through from shared CSS */
+    html, body { margin: 0; padding: 0; background: var(--w-bg-card); }
+    #main, #map-wrap { background: var(--w-bg-card); }
+    .leaflet-container { background: var(--w-bg-card) !important; }
 
     /* ── Status Strip ── */
     #statusbar {
@@ -131,7 +136,7 @@
     #sidebar.collapsed { width: 0; min-width: 0; overflow: hidden; }
 
     .sidebar-header {
-      padding: 14px 16px;
+      padding: 10px 14px;
       border-bottom: 1px solid var(--w-border);
       display: flex;
       align-items: center;
@@ -140,7 +145,7 @@
     }
 
     .sidebar-header h2 {
-      font-size: 13px;
+      font-size: 12px;
       font-weight: 600;
       color: var(--w-text-muted);
       text-transform: uppercase;
@@ -149,20 +154,45 @@
 
     /* ── Layer Toggles ── */
     .layer-toggles {
-      padding: 12px 16px;
-      border-bottom: 1px solid var(--w-border);
+      padding: 8px 10px;
       display: flex;
       flex-direction: column;
-      gap: 8px;
-      transition: border var(--w-transition);
+      gap: 3px;
     }
+
+    /* Collapsible Layers group */
+    details.layers-group {
+      border-bottom: 1px solid var(--w-border);
+    }
+    details.layers-group > summary {
+      list-style: none;
+      cursor: pointer;
+      padding: 8px 14px;
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--w-text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      user-select: none;
+    }
+    details.layers-group > summary::-webkit-details-marker { display: none; }
+    details.layers-group > summary::after {
+      content: "▾";
+      font-size: 11px;
+      transition: transform 0.15s ease;
+    }
+    details.layers-group:not([open]) > summary::after { transform: rotate(-90deg); }
+    details.layers-group > summary:hover { background: var(--w-bg-elevated); }
 
     .layer-toggle {
       display: flex;
       align-items: center;
       justify-content: space-between;
       cursor: pointer;
-      padding: 8px 12px;
+      padding: 5px 10px;
       border-radius: var(--w-radius-xs);
       background: transparent;
       border: 1px solid transparent;
@@ -176,7 +206,7 @@
       display: flex;
       align-items: center;
       gap: 8px;
-      font-size: 13px;
+      font-size: 12px;
       font-weight: 500;
       color: var(--w-text);
     }
@@ -213,7 +243,7 @@
 
     /* ── Search ── */
     .search-box {
-      padding: 12px 16px;
+      padding: 8px 12px;
       border-bottom: 1px solid var(--w-border);
       transition: border var(--w-transition);
     }
@@ -818,8 +848,10 @@
         <h2>Layers &amp; Events</h2>
       </div>
 
-      <!-- Layer Toggles -->
-      <div class="layer-toggles">
+      <!-- Layer Toggles (collapsible) -->
+      <details class="layers-group" open>
+        <summary>Layers (11)</summary>
+        <div class="layer-toggles">
         <div class="layer-toggle active" data-layer="incidents" onclick="toggleLayer(this)">
           <div class="layer-label">
             <span class="layer-dot" style="background:var(--w-red)"></span>
@@ -862,6 +894,20 @@
           </div>
           <div class="toggle-switch"></div>
         </div>
+        <div class="layer-toggle active" data-layer="travelTimes" onclick="toggleLayer(this)">
+          <div class="layer-label">
+            <span class="layer-dot" style="background:linear-gradient(90deg,#22c55e 0%,#f59e0b 50%,#ef4444 100%)"></span>
+            ⏱ Travel Times
+          </div>
+          <div class="toggle-switch"></div>
+        </div>
+        <div class="layer-toggle" data-layer="congestionZones" onclick="toggleLayer(this)">
+          <div class="layer-label">
+            <span class="layer-dot" style="background:#f59e0b"></span>
+            🌡 Congestion Zones
+          </div>
+          <div class="toggle-switch"></div>
+        </div>
         <div class="layer-toggle" data-layer="heatmap" onclick="toggleLayer(this)">
           <div class="layer-label">
             <span class="layer-dot" style="background:var(--w-purple)"></span>
@@ -883,7 +929,8 @@
           </div>
           <div class="toggle-switch"></div>
         </div>
-      </div>
+        </div>
+      </details>
 
       <!-- Search -->
       <div class="search-box">
@@ -900,7 +947,7 @@
     <div id="map-wrap">
       <div id="loading">
         <div class="spinner"></div>
-        <div class="loading-text">Loading Ayrshire traffic data…</div>
+        <div class="loading-text">Loading Central Belt & Ayrshire traffic data…</div>
       </div>
 
       <div id="map"></div>
@@ -1012,14 +1059,16 @@ themeObserver.observe(document.documentElement, { attributes: true, attributeFil
 
 // Layer groups
 const layers = {
-  incidents: L.layerGroup().addTo(map),
-  roadworks: L.layerGroup().addTo(map),
-  flow:      L.layerGroup().addTo(map),
-  tros:      L.layerGroup().addTo(map),
-  ferries:   L.layerGroup().addTo(map),
-  cameras:   L.layerGroup().addTo(map),
-  vms:       L.layerGroup().addTo(map),
-  fuel:      L.layerGroup(),
+  incidents:       L.layerGroup().addTo(map),
+  roadworks:       L.layerGroup().addTo(map),
+  flow:            L.layerGroup().addTo(map),
+  tros:            L.layerGroup().addTo(map),
+  ferries:         L.layerGroup().addTo(map),
+  cameras:         L.layerGroup().addTo(map),
+  vms:             L.layerGroup().addTo(map),
+  travelTimes:     L.layerGroup().addTo(map),
+  congestionZones: L.layerGroup(),
+  fuel:            L.layerGroup(),
 };
 
 let heatLayer = null;
@@ -1042,7 +1091,7 @@ setInterval(() => {
   }
 }, 120000);
 let allItems = [];
-let activeLayers = new Set(['incidents', 'roadworks', 'flow', 'flow-tiles', 'cameras', 'ferries', 'vms']);
+let activeLayers = new Set(['incidents', 'roadworks', 'flow', 'flow-tiles', 'cameras', 'ferries', 'vms', 'travelTimes']);
 let heatmapEnabled = false;
 
 // ── Marker Icons ─────────────────────────────────────────────────────────────
@@ -1219,6 +1268,8 @@ function buildPopup(item) {
     flow: 'badge-flow',
     tro: 'badge-tro',
     camera: 'badge-flow',
+    ferry: 'badge-ferry',
+    travel_time: 'badge-flow',
   }[item.type] || 'badge-roadworks';
 
   const badgeLabel = {
@@ -1228,6 +1279,8 @@ function buildPopup(item) {
     flow: 'Traffic Flow',
     tro: 'TRO',
     camera: 'Camera',
+    ferry: 'Ferry',
+    travel_time: 'Travel Time',
   }[item.type] || item.type;
 
   let extra = '';
@@ -1321,6 +1374,27 @@ function buildPopup(item) {
       </div>`;
   }
 
+  if (item.travel_time_data) {
+    const td = item.travel_time_data;
+    const tSec = td.travel_time_seconds;
+    const fSec = td.free_flow_seconds;
+    const ratio = typeof td.congestion_ratio === 'number' ? td.congestion_ratio : 0;
+    const ratioPct = Math.round(ratio * 100);
+    const ffSpeed = td.free_flow_speed_kmh;
+    // current speed = free flow speed scaled by (free_flow_seconds / travel_time_seconds)
+    const curSpeed = (tSec && fSec && ffSpeed) ? (ffSpeed * (fSec / tSec)) : null;
+    const ratioColor = ratio > 0.30 ? '#ef4444' : ratio > 0.10 ? '#f59e0b' : '#22c55e';
+    const measured = td.measured_at ? new Date(td.measured_at).toLocaleTimeString('en-GB', {hour:'2-digit', minute:'2-digit'}) : '';
+    extra = `
+      <div class="popup-flow-data">
+        <div>🛣 Segment: <strong>${td.site_name || td.site_id || '—'}</strong></div>
+        ${curSpeed !== null ? `<div>🚗 Speed: <strong>${curSpeed.toFixed(1)} km/h</strong>${ffSpeed ? ` (free flow: ${ffSpeed})` : ''}</div>` : (ffSpeed ? `<div>🚗 Free-flow speed: <strong>${ffSpeed} km/h</strong></div>` : '')}
+        <div>⏱ Travel time: <strong>${tSec != null ? (tSec/60).toFixed(1) + ' min' : '?'}</strong>${fSec != null ? ` (free flow: ${(fSec/60).toFixed(1)} min)` : ''}</div>
+        <div>📊 Delay: <strong style="color:${ratioColor}">${ratioPct}%</strong> · ${td.status || ''}</div>
+        ${measured ? `<div>🕐 Measured ${measured}</div>` : ''}
+      </div>`;
+  }
+
   const pubDate = item.pub_date ? `<div>🕐 ${new Date(item.pub_date).toLocaleDateString('en-GB', {day:'numeric',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'})}</div>` : '';
   const link = item.url ? `<a href="${item.url}" target="_blank" style="color:var(--w-blue);font-size:11px;">View source →</a>` : '';
 
@@ -1350,14 +1424,51 @@ function renderMarkers(data) {
     if (!item.lat || !item.lon) return;
 
     const layerKey = {
-      incidents: 'incidents',
-      roadworks: 'roadworks',
-      conditions: 'roadworks',
-      flow: 'flow',
-      tro: 'tros',
-      camera: 'cameras',
-      vms: 'vms',
+      incidents:   'incidents',
+      roadworks:   'roadworks',
+      conditions:  'roadworks',
+      flow:        'flow',
+      tro:         'tros',
+      camera:      'cameras',
+      vms:         'vms',
+      ferry:       'ferries',
+      travel_time: 'travelTimes',
     }[item.type] || 'roadworks';
+
+    // Travel-time segments get a custom delay-coloured circle marker (no default icon)
+    if (item.type === 'travel_time') {
+      const tt = item.travel_time_data || {};
+      const ratio = typeof tt.congestion_ratio === 'number' ? tt.congestion_ratio : 0;
+      const ttColor = ratio > 0.30 ? '#ef4444' : ratio > 0.10 ? '#f59e0b' : '#22c55e';
+      const cm = L.circleMarker([item.lat, item.lon], {
+        radius: 6,
+        color: '#0b0b0b',
+        weight: 1,
+        fillColor: ttColor,
+        fillOpacity: 0.9,
+      }).bindPopup(buildPopup(item), { maxWidth: 320 });
+      cm.on('click', () => scrollToCard(item.id));
+      layers.travelTimes.addLayer(cm);
+
+      // If the segment exposes geometry, draw a coloured polyline for it
+      const geom = tt.geometry;
+      if (Array.isArray(geom) && geom.length > 1) {
+        const coords = geom.map(g => [g.lat ?? g[0], g.lon ?? g[1]]).filter(p => p[0] != null);
+        if (coords.length > 1) {
+          const line = L.polyline(coords, {
+            color: ttColor,
+            weight: 5,
+            opacity: 0.85,
+            lineCap: 'round',
+          }).bindPopup(buildPopup(item), { maxWidth: 320 });
+          layers.travelTimes.addLayer(line);
+        }
+      }
+
+      const heatWeight = Math.max(0.2, Math.min(1, ratio + 0.2));
+      heatPoints.push([item.lat, item.lon, heatWeight]);
+      return; // skip default marker pathway for travel_time
+    }
 
     const marker = L.marker([item.lat, item.lon], { icon: getIcon(item) })
       .bindPopup(buildPopup(item), { maxWidth: 300 });
@@ -1448,19 +1559,19 @@ function filterList(q) {
   const container = document.getElementById('incident-list');
 
   const filtered = allItemsFlat.filter(item => {
-    const layerMap = { flow: 'flow', incidents: 'incidents', camera: 'cameras', tro: 'roadworks', roadworks: 'roadworks', conditions: 'roadworks' };
+    const layerMap = { flow: 'flow', incidents: 'incidents', camera: 'cameras', tro: 'tros', roadworks: 'roadworks', conditions: 'roadworks', ferry: 'ferries', travel_time: 'travelTimes', vms: 'vms' };
     if (!activeLayers.has(layerMap[item.type] || 'roadworks')) return false;
     if (!searchQuery) return true;
     return (item.title + item.description + item.source).toLowerCase().includes(searchQuery);
   });
 
   if (!filtered.length) {
-    container.innerHTML = `<div class="empty-state">${searchQuery ? 'No results for "' + searchQuery + '"' : 'No active events in Ayrshire'}</div>`;
+    container.innerHTML = `<div class="empty-state">${searchQuery ? 'No results for "' + searchQuery + '"' : 'No active events in Central Belt & Ayrshire'}</div>`;
     return;
   }
 
-  const badgeClass = { incidents: 'badge-incident', roadworks: 'badge-roadworks', conditions: 'badge-roadworks', flow: 'badge-flow', tro: 'badge-tro', camera: 'badge-flow' };
-  const badgeLabel = { incidents: 'Incident', roadworks: 'Roadworks', conditions: 'Condition', flow: 'Flow', tro: 'TRO', camera: 'Camera' };
+  const badgeClass = { incidents: 'badge-incident', roadworks: 'badge-roadworks', conditions: 'badge-roadworks', flow: 'badge-flow', tro: 'badge-tro', camera: 'badge-flow', ferry: 'badge-ferry', travel_time: 'badge-flow', vms: 'badge-flow' };
+  const badgeLabel = { incidents: 'Incident', roadworks: 'Roadworks', conditions: 'Condition', flow: 'Flow', tro: 'TRO', camera: 'Camera', ferry: 'Ferry', travel_time: 'Travel Time', vms: 'VMS' };
   const dotColor = { red: 'var(--w-red)', amber: 'var(--w-orange)', green: 'var(--w-green)', purple: 'var(--w-purple)', cyan: '#06b6d4' };
 
   container.innerHTML = filtered.slice(0, 100).map(item => `
@@ -1482,7 +1593,7 @@ function flyToItem(id) {
   if (!item) return;
   map.flyTo([item.lat, item.lon], 14, { duration: 0.8 });
   setTimeout(() => {
-    const layerKey = { incidents: 'incidents', roadworks: 'roadworks', conditions: 'roadworks', flow: 'flow', tro: 'tros', camera: 'cameras' }[item.type] || 'roadworks';
+    const layerKey = { incidents: 'incidents', roadworks: 'roadworks', conditions: 'roadworks', flow: 'flow', tro: 'tros', camera: 'cameras', vms: 'vms', ferry: 'ferries', travel_time: 'travelTimes' }[item.type] || 'roadworks';
     layers[layerKey].eachLayer(m => {
       if (m.getLatLng().lat === item.lat && m.getLatLng().lng === item.lon) {
         m.openPopup();
@@ -1580,6 +1691,19 @@ async function fetchFuelStations() {
   }
 }
 
+function resolveFuelAddress(s){
+  if (typeof s.address === 'string' && s.address) return s.address;
+  const a = s.address;
+  if (a && typeof a === 'object') {
+    return a.address_line_1 || a.line_1 || a.street || a.town || a.city || a.postcode || '';
+  }
+  const loc = s.location;
+  if (loc && typeof loc === 'object') {
+    return loc.address_line_1 || loc.line_1 || loc.street || loc.town || loc.city || loc.postcode || '';
+  }
+  return '';
+}
+
 function renderFuelStations() {
   layers.fuel.clearLayers();
   if (!fuelStations.length) return;
@@ -1638,7 +1762,7 @@ function renderFuelStations() {
     const popup = `
       <div style="font-family:system-ui;min-width:200px">
         <div style="font-weight:800;font-size:14px;margin-bottom:6px">⛽ ${s.name || s.trading_name}</div>
-        <div style="font-size:12px;color:#9ca3af;margin-bottom:8px">${s.brand || ''} • ${s.address || (s.location && s.location.address_line_1) || ''}</div>
+        <div style="font-size:12px;color:#9ca3af;margin-bottom:8px">${s.brand || ''} • ${resolveFuelAddress(s)}</div>
         <div style="display:flex;gap:12px;margin-bottom:8px">${priceHtml.join(' • ')}</div>
         <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
           ${trafficBadge} ${freshBadge}
@@ -1706,9 +1830,69 @@ if (window.innerWidth <= 768) {
   document.getElementById('sidebar').classList.add('collapsed');
 }
 
+// ── Congestion Zones ──────────────────────────────────────────────────────────
+let congestionZones = [];
+async function fetchCongestionZones() {
+  try {
+    const resp = await fetch(API_BASE + '/api/traffic/congestion-zones');
+    if (!resp.ok) throw new Error('HTTP ' + resp.status);
+    const data = await resp.json();
+    congestionZones = data.zones || [];
+    renderCongestionZones();
+  } catch (e) {
+    console.warn('Congestion zones fetch failed:', e);
+  }
+}
+
+function renderCongestionZones() {
+  layers.congestionZones.clearLayers();
+  if (!congestionZones.length) return;
+  congestionZones.forEach(z => {
+    if (z.lat == null || z.lon == null) return;
+    const cong = typeof z.congestion === 'number' ? z.congestion : 0;
+    const zColor = cong > 0.6 ? '#ef4444' : cong > 0.3 ? '#f59e0b' : '#22c55e';
+    const fillOp = Math.min(0.55, 0.15 + cong * 0.5);
+    const geom = Array.isArray(z.geometry) ? z.geometry : [];
+    // Normalise geometry pairs (accept {lat,lon} or [lat,lon])
+    const coords = geom.map(p => {
+      if (p && typeof p === 'object' && 'lat' in p) return [p.lat, p.lon];
+      if (Array.isArray(p) && p.length >= 2) return [p[0], p[1]];
+      return null;
+    }).filter(Boolean);
+
+    const popup = `
+      <div style="min-width:180px;font-family:Inter,sans-serif;">
+        <div class="popup-title"><span class="badge badge-roadworks">Congestion Zone</span><br><br>${z.title || 'Zone'}</div>
+        <div class="popup-flow-data">
+          <div>📊 Congestion: <strong style="color:${zColor}">${Math.round(cong * 100)}%</strong></div>
+          <div>📡 ${z.source || '—'}</div>
+        </div>
+      </div>`;
+
+    if (coords.length >= 3) {
+      const poly = L.polygon(coords, {
+        color: zColor, weight: 1.5, opacity: 0.8,
+        fillColor: zColor, fillOpacity: fillOp,
+      }).bindPopup(popup, { maxWidth: 260 });
+      layers.congestionZones.addLayer(poly);
+    } else {
+      // Radius scales with congestion, min 400 m, max 2500 m
+      const radius = 400 + cong * 2100;
+      const circle = L.circle([z.lat, z.lon], {
+        radius: radius,
+        color: zColor, weight: 1.5, opacity: 0.8,
+        fillColor: zColor, fillOpacity: fillOp,
+      }).bindPopup(popup, { maxWidth: 260 });
+      layers.congestionZones.addLayer(circle);
+    }
+  });
+}
+
 // ── Init ─────────────────────────────────────────────────────────────────────
 fetchTraffic();
 setInterval(fetchTraffic, REFRESH_INTERVAL);
+fetchCongestionZones();
+setInterval(fetchCongestionZones, REFRESH_INTERVAL);
 
 // ── Vision Analysis Integration ───────────────────────────────────────────────
 let visionData = null;

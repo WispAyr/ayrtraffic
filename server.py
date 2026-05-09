@@ -28,6 +28,8 @@ from fastapi.responses import JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 
+import studio as nar_studio
+
 # ─── Config ──────────────────────────────────────────────────────────────────
 
 PORT = 3876
@@ -41,7 +43,7 @@ AYRSHIRE_BBOX = {
 }
 NURO_HUB = "http://10.200.0.8:3960"
 SERVICE_ID = "ayrtraffic"
-SIPHON_URL = "http://142.202.191.208:3882"
+SIPHON_URL = "http://localhost:3883"
 # ─── DATEX II Config (Traffic Scotland) ──────────────────────────────────────
 
 DATEX2_CLIENT_ID = "14d2c05d-696d-45be-8ddc-2b20105de3c7"
@@ -2499,6 +2501,7 @@ async def camera_sensors():
             offline += 1
         sensors_out.append({
             "sensor_id": sensor_id,
+            "region_id": sensor_id.split("_", 1)[0] if "_" in sensor_id else None,
             "name": sensor["name"],
             "lat": sensor["lat"],
             "lon": sensor["lon"],
@@ -2524,7 +2527,7 @@ async def camera_sensors():
 
 # ─── Vision Analysis Proxy ────────────────────────────────────────────────────
 
-VISION_SERVICE = "http://localhost:3878"
+VISION_SERVICE = "http://localhost:8882"
 
 @app.get("/api/vision")
 async def vision_proxy():
@@ -2628,6 +2631,322 @@ async def serve_cctv():
     return {"error": "CCTV page not found"}
 
 
+# ─── NAR Studio + Presenter views ────────────────────────────────────────────
+
+@app.get("/api/studio")
+async def api_studio():
+    """Aggregated kiosk payload for the studio screen — trunk, towns, top items."""
+    data = cache_get("all_traffic") or await fetch_all_data()
+    return JSONResponse(nar_studio.build_studio(data))
+
+
+@app.get("/api/presenter")
+async def api_presenter():
+    """Tagged + sorted list payload for the presenter screen."""
+    data = cache_get("all_traffic") or await fetch_all_data()
+    return JSONResponse(nar_studio.build_presenter(data))
+
+
+@app.get("/api/road/{code}")
+async def api_road(code: str):
+    """Drill-down view for one road (e.g. /api/road/A77)."""
+    data = cache_get("all_traffic") or await fetch_all_data()
+    return JSONResponse(nar_studio.build_road(data, code))
+
+
+# ─── Bus + train layers (proxy to train-tracker on big-server) ───────────────
+
+TRAIN_TRACKER_URL = "http://127.0.0.1:3974"
+AYRSHIRE_BUS_BBOX = {  # tighter than the AYRSHIRE_BBOX; trains tracker covers central belt
+    "south": 55.10, "north": 55.95,
+    "west": -5.05,  "east":  -4.10,
+}
+
+
+@app.get("/api/buses")
+async def api_buses():
+    """Live bus positions filtered to Ayrshire (proxy to train-tracker /api/buses)."""
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            r = await client.get(f"{TRAIN_TRACKER_URL}/api/buses")
+            r.raise_for_status()
+            data = r.json()
+    except Exception as e:
+        log.warning(f"bus proxy failed: {e}")
+        return JSONResponse({"buses": [], "error": str(e), "count": 0}, status_code=200)
+
+    buses = []
+    seen = set()
+    bbox = AYRSHIRE_BUS_BBOX
+    for b in data if isinstance(data, list) else []:
+        coords = b.get("coordinates") or [None, None]
+        if len(coords) < 2:
+            continue
+        lon, lat = coords[0], coords[1]
+        if lat is None or lon is None:
+            continue
+        if not (bbox["south"] <= lat <= bbox["north"] and bbox["west"] <= lon <= bbox["east"]):
+            continue
+        bid = b.get("id")
+        if bid in seen:
+            continue
+        seen.add(bid)
+        svc = b.get("service") or {}
+        veh = b.get("vehicle") or {}
+        buses.append({
+            "id": bid,
+            "lat": lat, "lon": lon,
+            "heading": _try_float(b.get("heading")),
+            "destination": b.get("destination"),
+            "line": svc.get("line_name"),
+            "vehicle": veh.get("name"),
+            "colour": veh.get("colour") or "#ffcb43",
+            "datetime": b.get("datetime"),
+        })
+
+    return JSONResponse({"buses": buses, "count": len(buses)})
+
+
+def _try_float(v):
+    try:
+        return float(v) if v is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+# Static Ayrshire railway stations (CRS code, name, lat, lon)
+AYRSHIRE_STATIONS = [
+    ("AYR", "Ayr",                    55.4583, -4.6367),
+    ("PTW", "Prestwick Town",         55.4955, -4.6147),
+    ("PRA", "Prestwick Int. Airport", 55.5097, -4.6094),
+    ("TRN", "Troon",                  55.5417, -4.6647),
+    ("BSS", "Barassie",               55.5583, -4.6517),
+    ("IRV", "Irvine",                 55.6105, -4.6680),
+    ("KWN", "Kilwinning",             55.6533, -4.7041),
+    ("STV", "Stevenston",             55.6388, -4.7589),
+    ("SCO", "Saltcoats",              55.6342, -4.7866),
+    ("ARD", "Ardrossan South Beach",  55.6395, -4.8132),
+    ("ADS", "Ardrossan Harbour",      55.6406, -4.8186),
+    ("WKB", "West Kilbride",          55.6920, -4.8580),
+    ("LAR", "Largs",                  55.7948, -4.8716),
+    ("FAI", "Fairlie",                55.7592, -4.8608),
+    ("DAL", "Dalry",                  55.7088, -4.7185),
+    ("KBE", "Kilbirnie / Glengarnock", 55.7383, -4.6700),
+    ("MYB", "Maybole",                55.3520, -4.6822),
+    ("GIR", "Girvan",                 55.2444, -4.8633),
+    ("KMK", "Kilmarnock",             55.6117, -4.4956),
+    ("STT", "Stewarton",              55.6837, -4.5158),
+]
+
+
+@app.get("/api/trains/stations")
+async def api_train_stations():
+    """Static Ayrshire stations + a 'health' summary of next departure delays per station."""
+    out = []
+    for crs, name, lat, lon in AYRSHIRE_STATIONS:
+        out.append({"crs": crs, "name": name, "lat": lat, "lon": lon})
+    return JSONResponse({"stations": out, "count": len(out)})
+
+
+# ─── Weather + warnings + events + calendar (full-tilt extras) ──────────────
+
+AYRWEATHER_URL = "http://127.0.0.1:3875"
+PAVILION_EVENT_URL = "https://broadcast.studio.wispayr.online/api/pavilion-festival/event"
+
+
+@app.get("/api/weather")
+async def api_weather(loc: str = "ayr"):
+    """Current conditions for a location (default Ayr) — proxy to ayrweather."""
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            r = await client.get(f"{AYRWEATHER_URL}/api/weather/{loc.lower()}")
+            r.raise_for_status()
+            d = r.json()
+    except Exception as e:
+        return JSONResponse({"error": str(e), "location": loc}, status_code=200)
+
+    cur = (d.get("forecast") or {}).get("current") or {}
+    return JSONResponse({
+        "location": (d.get("location") or {}).get("name") or loc.title(),
+        "temp_c": cur.get("temperature_2m"),
+        "feels_c": cur.get("apparent_temperature"),
+        "humidity": cur.get("relative_humidity_2m"),
+        "wmo_code": cur.get("weather_code"),
+        "wind_mph": cur.get("wind_speed_10m"),
+        "gust_mph": cur.get("wind_gusts_10m"),
+        "wind_dir": cur.get("wind_direction_10m"),
+        "precip_mm": cur.get("precipitation"),
+        "cloud_pct": cur.get("cloud_cover"),
+        "visibility_m": cur.get("visibility"),
+        "pressure_hpa": cur.get("surface_pressure"),
+        "measured_at": cur.get("time"),
+    })
+
+
+@app.get("/api/warnings")
+async def api_warnings():
+    """Met Office warnings + Ayrshire flood warnings — proxied + merged."""
+    out = {"met_office": [], "floods": [], "fetched_at": None}
+    try:
+        async with httpx.AsyncClient(timeout=6.0) as client:
+            r = await client.get(f"{AYRWEATHER_URL}/api/warnings")
+            r.raise_for_status()
+            d = r.json()
+            out["met_office"] = d.get("warnings", []) or []
+            out["fetched_at"] = d.get("fetched_at")
+    except Exception as e:
+        log.warning(f"warnings proxy: {e}")
+    try:
+        async with httpx.AsyncClient(timeout=6.0) as client:
+            r = await client.get(f"{AYRWEATHER_URL}/api/flood/warnings/ayrshire")
+            r.raise_for_status()
+            d = r.json()
+            out["floods"] = d.get("warnings", []) or d.get("items", []) or []
+    except Exception as e:
+        log.warning(f"flood warnings proxy: {e}")
+    out["count"] = len(out["met_office"]) + len(out["floods"])
+    return JSONResponse(out)
+
+
+@app.get("/api/events")
+async def api_events():
+    """Public events that affect Ayrshire travel — Pavilion Festival etc."""
+    items = []
+    try:
+        async with httpx.AsyncClient(timeout=6.0) as client:
+            r = await client.get(PAVILION_EVENT_URL)
+            r.raise_for_status()
+            ev = r.json()
+            if ev and (ev.get("status") in ("upcoming", "live", "active", "in_progress")):
+                loc = ev.get("location") or {}
+                centre = loc.get("center") or [None, None]
+                if len(centre) >= 2 and centre[0] is not None:
+                    items.append({
+                        "id": ev.get("id") or "pavilion-festival",
+                        "name": ev.get("name") or "Pavilion Festival",
+                        "type": ev.get("type") or "music_festival",
+                        "lat": centre[0], "lon": centre[1],
+                        "address": loc.get("address"),
+                        "starts": (ev.get("dates") or {}).get("start"),
+                        "ends":   (ev.get("dates") or {}).get("end"),
+                        "status": ev.get("status"),
+                        "bounds": loc.get("bounds"),
+                    })
+    except Exception as e:
+        log.warning(f"events proxy: {e}")
+    return JSONResponse({"events": items, "count": len(items)})
+
+
+@app.get("/api/closures-calendar")
+async def api_closures_calendar():
+    """7-day calendar of roadworks starts/ends parsed from current data feed."""
+    from datetime import date, timedelta, datetime as _dt
+    import re as _re
+
+    data = cache_get("all_traffic") or await fetch_all_data()
+    today = _dt.now().date()
+    days = [today + timedelta(days=i) for i in range(7)]
+
+    # Each item bucketed into days where it starts, ends, or is active
+    by_day: dict[str, dict[str, list]] = {d.isoformat(): {"starts": [], "ends": [], "active": []} for d in days}
+
+    # Date pattern: ISO8601 inside descriptions ("From: 2026-05-15T08:00:00")
+    iso_re = _re.compile(r"(\d{4}-\d{2}-\d{2})T\d{2}:\d{2}")
+
+    for item in (data.get("roadworks") or []) + (data.get("tros") or []):
+        desc = item.get("description") or ""
+        title = item.get("title") or ""
+        starts_at = ends_at = None
+        # Parse "From: ... | Until: ..." pattern that DATEX uses
+        m_from = _re.search(r"From:\s*(\d{4}-\d{2}-\d{2})", desc)
+        m_to   = _re.search(r"Until:\s*(\d{4}-\d{2}-\d{2})", desc)
+        if m_from:
+            try: starts_at = _dt.strptime(m_from.group(1), "%Y-%m-%d").date()
+            except ValueError: pass
+        if m_to:
+            try: ends_at = _dt.strptime(m_to.group(1), "%Y-%m-%d").date()
+            except ValueError: pass
+        if not starts_at and not ends_at:
+            continue
+
+        slim = {
+            "id": item.get("id"),
+            "title": title,
+            "description": desc[:200],
+            "lat": item.get("lat"), "lon": item.get("lon"),
+            "severity": item.get("severity"),
+            "type": item.get("type"),
+            "starts": starts_at.isoformat() if starts_at else None,
+            "ends":   ends_at.isoformat() if ends_at else None,
+        }
+
+        for d in days:
+            key = d.isoformat()
+            if starts_at and d == starts_at:
+                by_day[key]["starts"].append(slim)
+            elif ends_at and d == ends_at:
+                by_day[key]["ends"].append(slim)
+            elif starts_at and ends_at and starts_at < d < ends_at:
+                by_day[key]["active"].append(slim)
+
+    return JSONResponse({
+        "days": [
+            {
+                "date": d.isoformat(),
+                "weekday": d.strftime("%a"),
+                "starts": by_day[d.isoformat()]["starts"][:8],
+                "ends":   by_day[d.isoformat()]["ends"][:8],
+                "active_count": len(by_day[d.isoformat()]["active"]),
+                "starts_count": len(by_day[d.isoformat()]["starts"]),
+                "ends_count":   len(by_day[d.isoformat()]["ends"]),
+            }
+            for d in days
+        ],
+    })
+
+
+@app.get("/api/trains/board/{crs}")
+async def api_train_board(crs: str):
+    """Departure board for a station (proxy to train-tracker /api/all from that station)."""
+    crs = crs.upper()
+    try:
+        async with httpx.AsyncClient(timeout=8.0) as client:
+            r = await client.get(f"{TRAIN_TRACKER_URL}/api/all", params={"crs": crs})
+            r.raise_for_status()
+            return JSONResponse(r.json())
+    except Exception as e:
+        log.warning(f"train board proxy failed for {crs}: {e}")
+        # Fallback — try without the param (train-tracker serves Ayr-default)
+        try:
+            async with httpx.AsyncClient(timeout=8.0) as client:
+                r = await client.get(f"{TRAIN_TRACKER_URL}/api/all")
+                r.raise_for_status()
+                return JSONResponse(r.json())
+        except Exception as e2:
+            return JSONResponse({"error": str(e2), "northbound": {"departures": []}, "southbound": {"departures": []}}, status_code=200)
+
+
+_NO_CACHE = {"Cache-Control": "no-cache, must-revalidate", "Pragma": "no-cache"}
+
+
+@app.get("/studio")
+async def serve_studio():
+    """Now Ayrshire Radio — studio kiosk view."""
+    page = STATIC_DIR / "studio.html"
+    if page.exists():
+        return FileResponse(str(page), headers=_NO_CACHE)
+    return {"error": "studio page not found"}
+
+
+@app.get("/presenter")
+async def serve_presenter():
+    """Now Ayrshire Radio — presenter desk view."""
+    page = STATIC_DIR / "presenter.html"
+    if page.exists():
+        return FileResponse(str(page), headers=_NO_CACHE)
+    return {"error": "presenter page not found"}
+
+
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 
@@ -2661,4 +2980,4 @@ async def siphon_incidents():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("server:app", host="0.0.0.0", port=PORT, reload=False)
+    uvicorn.run("server:app", host="127.0.0.1", port=PORT, reload=False)

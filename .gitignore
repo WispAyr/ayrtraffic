@@ -30,3 +30,15 @@ Thumbs.db
 
 # PM2
 .pm2/
+
+# Pre-baked road geometry — small static data, ship with code
+!data/
+data/cache.db
+data/cameras/
+
+# Old backup files — historical clutter, exclude from working tree
+*.bak
+*.bak.*
+*.bak-*
+.bak-*/
+*.pre-*
