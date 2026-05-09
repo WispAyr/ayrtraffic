@@ -1139,9 +1139,14 @@
       content: ''; width: 8px; height: 8px; border-radius: 50%;
       background: currentColor; box-shadow: 0 0 6px currentColor;
     }
-    .rp-mini-meta .dot.base  { color: var(--accent); }
-    .rp-mini-meta .dot.hot   { color: var(--bad); }
-    .rp-mini-meta .dot.event { color: var(--fg-soft); }
+    .rp-mini-meta .dot.base.green { color: var(--good); }
+    .rp-mini-meta .dot.base.amber { color: var(--warn); }
+    .rp-mini-meta .dot.base.red   { color: var(--bad); }
+    .rp-mini-meta .dot.base       { color: var(--accent); }
+    .rp-mini-meta .dot.hot.green  { color: var(--good); }
+    .rp-mini-meta .dot.hot.amber  { color: var(--warn); }
+    .rp-mini-meta .dot.hot        { color: var(--bad); }
+    .rp-mini-meta .dot.event      { color: var(--fg-soft); }
 
     /* Road focus mode — dim everything except the highlighted road */
     .leaflet-container.road-focus .leaflet-tile-pane     { filter: brightness(0.55) saturate(0.8); transition: filter 0.35s; }
@@ -2009,6 +2014,11 @@ function renderMiniMapBlock(d) {
   const segCount = (d.segments || []).length;
   const incCount = (d.incidents || []).length + (d.roadworks || []).length + (d.tros || []).length;
   const camCount = (d.cameras || []).length;
+  const statusCls = ['red','amber','green'].includes(d.status) ? d.status : '';
+  const statusLabel =
+    d.status === 'red'   ? 'Disrupted' :
+    d.status === 'amber' ? 'Watch' :
+    d.status === 'green' ? 'All clear' : '';
   return `<button class="rp-mini-toggle" id="rp-mini-toggle">
     <span>📍 Show on map · ${d.code}</span>
     <span class="arr">▾</span>
@@ -2016,8 +2026,8 @@ function renderMiniMapBlock(d) {
   <div class="rp-mini-wrap" id="rp-mini-wrap">
     <div class="rp-mini" id="rp-mini"></div>
     <div class="rp-mini-meta">
-      <span class="dot base">Road shape</span>
-      ${(d.hot_geometry || []).length ? '<span class="dot hot">Hot zone</span>' : ''}
+      <span class="dot base ${statusCls}">${escapeHtml(statusLabel || 'Road shape')}</span>
+      ${(d.hot_geometry || []).length ? `<span class="dot hot ${statusCls}">Hot zone</span>` : ''}
       <span class="dot event">${segCount} seg · ${incCount} events · ${camCount} cams</span>
     </div>
   </div>`;
@@ -2058,27 +2068,31 @@ function paintMiniMap(d) {
     miniMarkerLayer.clearLayers();
   }
 
-  const STATUS_COLOUR = { red: '#f87171', amber: '#fbbf24', green: '#34d399' };
-  const hotColour = STATUS_COLOUR[d.status] || '#ff5722';
+  const STATUS = {
+    red:    { base: '#f87171', hot: '#f87171', baseOpacity: 0.6 },
+    amber:  { base: '#fbbf24', hot: '#fbbf24', baseOpacity: 0.6 },
+    green:  { base: '#34d399', hot: '#34d399', baseOpacity: 0.7 },
+  };
+  const palette = STATUS[d.status] || { base: '#ff5722', hot: '#ff5722', baseOpacity: 0.6 };
 
-  // Base road shape
+  // Base road shape (status-coloured)
   for (const line of (d.geometry || [])) {
     if (!line || line.length < 2) continue;
     L.polyline(line, {
-      color: '#ff5722', weight: 3, opacity: 0.6,
+      color: palette.base, weight: 3, opacity: palette.baseOpacity,
       lineCap: 'round', lineJoin: 'round',
       interactive: false,
     }).addTo(miniRoadLayer);
   }
-  // Hot zones
+  // Hot zones — same hue, thicker + brighter
   for (const line of (d.hot_geometry || [])) {
     if (!line || line.length < 2) continue;
     L.polyline(line, {
-      color: hotColour, weight: 12, opacity: 0.25,
+      color: palette.hot, weight: 12, opacity: 0.3,
       lineCap: 'round', lineJoin: 'round', interactive: false,
     }).addTo(miniRoadLayer);
     L.polyline(line, {
-      color: hotColour, weight: 5, opacity: 0.95,
+      color: palette.hot, weight: 5, opacity: 1.0,
       lineCap: 'round', lineJoin: 'round', interactive: false,
     }).addTo(miniRoadLayer);
   }
@@ -2156,40 +2170,44 @@ function applyRoadFocus(code, geometry, status, hotGeometry) {
   // Clear any prior highlight
   roadHighlightLayer.clearLayers();
 
-  const STATUS_COLOUR = { red: '#f87171', amber: '#fbbf24', green: '#34d399' };
-  const hotColour = STATUS_COLOUR[status] || '#ff5722';
-  const baseColour = '#ff5722'; // accent — the road's identity, regardless of status
+  // Base = the road's overall status colour (calm full-length stroke)
+  // Hot  = the same hue, but punchier — thicker, brighter, with a halo
+  const STATUS = {
+    red:    { base: '#f87171', hot: '#f87171', baseOpacity: 0.55 },
+    amber:  { base: '#fbbf24', hot: '#fbbf24', baseOpacity: 0.55 },
+    green:  { base: '#34d399', hot: '#34d399', baseOpacity: 0.65 },
+  };
+  const palette = STATUS[status] || { base: '#ff5722', hot: '#ff5722', baseOpacity: 0.55 };
 
-  // 1. Base layer: full pre-baked OSM road shape (subtle, always orange)
-  //    Wide soft halo + thinner crisp stroke
+  // 1. Base layer: full pre-baked OSM road shape, status-coloured
   for (const line of (geometry || [])) {
     if (!line || line.length < 2) continue;
     L.polyline(line, {
       pane: 'roadHighlightGlow',
-      color: baseColour, weight: 12, opacity: 0.10,
+      color: palette.base, weight: 12, opacity: 0.10,
       lineCap: 'round', lineJoin: 'round',
       interactive: false,
     }).addTo(roadHighlightLayer);
     L.polyline(line, {
       pane: 'roadHighlight',
-      color: baseColour, weight: 3, opacity: 0.55,
+      color: palette.base, weight: 3, opacity: palette.baseOpacity,
       lineCap: 'round', lineJoin: 'round',
       interactive: false,
     }).addTo(roadHighlightLayer);
   }
 
-  // 2. Hot zones: TomTom incident polylines, bright + status-coloured, on top
+  // 2. Hot zones: TomTom incident polylines, bright + thick, with halo
   for (const line of (hotGeometry || [])) {
     if (!line || line.length < 2) continue;
     L.polyline(line, {
       pane: 'roadHighlightGlow',
-      color: hotColour, weight: 18, opacity: 0.22,
+      color: palette.hot, weight: 18, opacity: 0.28,
       lineCap: 'round', lineJoin: 'round',
       interactive: false,
     }).addTo(roadHighlightLayer);
     L.polyline(line, {
       pane: 'roadHighlight',
-      color: hotColour, weight: 6, opacity: 0.95,
+      color: palette.hot, weight: 7, opacity: 1.0,
       lineCap: 'round', lineJoin: 'round',
       interactive: false,
     }).addTo(roadHighlightLayer);
