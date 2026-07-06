@@ -165,7 +165,7 @@
 
 <script>
 const API = '';                         // same-origin
-const STATIONS = ['AYR','KMK','TRO','IRV','ADS','LAR']; // key Ayrshire boards
+const STATIONS = ['AYR','KMK','TRN','IRV','PTW','ARD','LAR']; // key Ayrshire CRS codes (TRN=Troon, ARD=Ardrossan)
 const TRUNK_ROADS = ['M77','A77','A78','A76','A719','A737','A736','A71','A70']; // coloured network
 const DWELL = 9000;                      // ms per scene
 const AYR_VIEW = [55.5, -4.5];
@@ -237,6 +237,8 @@ async function load() {
     const deps = (b && ((b.southbound&&b.southbound.departures)||[]).concat((b.northbound&&b.northbound.departures)||[])) || [];
     for (const d of deps.slice(0, 3)) trains.push({ from: c, ...d });
   }
+  // soonest departures first (scheduled is "HH:MM")
+  trains.sort((a, b) => String(a.scheduled || a.std || '').localeCompare(String(b.scheduled || b.std || '')));
   rebuild();
   loadRoads();
 }
@@ -404,10 +406,16 @@ function showScene(idx) {
   }
   else if (sc.kind === 'trains') {
     map.flyTo(AYR_VIEW, 9, { duration: 1.6 });
-    const rows = trains.slice(0, 7).map(t =>
-      `<div class="row"><span class="rd amber">${esc(t.from)}</span>
+    const rows = trains.slice(0, 7).map(t => {
+      const time = t.scheduled || t.std || '—';                 // actual departure time
+      const exp = String(t.expected || t.etd || '').trim();      // "On Time" / revised time / "Cancelled"
+      const cancelled = /cancel/i.test(exp);
+      const delayed = /^\d{1,2}:\d{2}$/.test(exp) && exp !== time;
+      const label = cancelled ? time + ' · CANC' : (delayed ? time + ' → ' + exp : time);
+      return `<div class="row"><span class="rd amber">${esc(t.from)}</span>
         <span class="txt">${esc(t.destination || t.dest || '')}</span>
-        <span class="delay ${(t.expected||'').toLowerCase().includes('on time')?'ok':'up'}">${esc(t.expected || t.scheduled || t.std || '')}</span></div>`).join('');
+        <span class="delay ${cancelled || delayed ? 'up' : 'ok'}">${esc(label)}</span></div>`;
+    }).join('');
     spot.innerHTML = `<div class="cap">SCOTRAIL — NEXT DEPARTURES</div><div class="rows">${rows}</div>`;
   }
   else { // clear
