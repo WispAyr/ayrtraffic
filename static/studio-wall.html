@@ -1,0 +1,321 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Now Ayrshire Radio · Travel · Studio Wall</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800;900&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    --navy: #10171e; --panel: rgba(255,255,255,0.05); --line: rgba(255,255,255,0.09);
+    --red: #ff3b3b; --amber: #ffb020; --green: #37d67a; --ink: #eef3f7; --dim: rgba(238,243,247,0.55);
+    --accent: #F7941D;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; overflow: hidden; }
+  body {
+    background: radial-gradient(ellipse 120% 90% at 50% 0%, #16222c 0%, var(--navy) 60%);
+    color: var(--ink); font-family: 'Inter', system-ui, sans-serif;
+    display: flex; flex-direction: column; height: 100vh;
+  }
+  /* ── Header ── */
+  header {
+    display: flex; align-items: center; gap: 2vw; padding: 1.4vh 2vw;
+    border-bottom: 1px solid var(--line); background: rgba(0,0,0,0.25);
+  }
+  .brand { display: flex; flex-direction: column; line-height: 1; }
+  .brand .k { font-size: 1.1vh; letter-spacing: 0.3em; color: var(--dim); font-weight: 700; }
+  .brand .n { font-size: 2.6vh; font-weight: 900; }
+  .brand .n b { color: var(--accent); }
+  .live { display: inline-flex; align-items: center; gap: 0.5vw; font-size: 1.4vh; font-weight: 800;
+    letter-spacing: 0.15em; color: var(--red); }
+  .live .dot { width: 1vh; height: 1vh; border-radius: 50%; background: var(--red); animation: pulse 1.4s infinite; }
+  .stats { display: flex; gap: 1.2vw; margin-left: auto; }
+  .stat { text-align: center; min-width: 6vw; }
+  .stat .v { font-size: 3.6vh; font-weight: 900; font-variant-numeric: tabular-nums; line-height: 1; }
+  .stat .l { font-size: 1.05vh; letter-spacing: 0.18em; color: var(--dim); font-weight: 700; margin-top: 0.4vh; }
+  .stat.red .v { color: var(--red); } .stat.amber .v { color: var(--amber); }
+  .clock { text-align: right; font-variant-numeric: tabular-nums; }
+  .clock .t { font-size: 4vh; font-weight: 900; letter-spacing: 0.02em; }
+  .clock .t .s { color: var(--accent); font-size: 2.2vh; }
+  .clock .d { font-size: 1.2vh; color: var(--dim); letter-spacing: 0.1em; }
+  /* ── Warning ribbon ── */
+  #warn { display: none; align-items: center; gap: 1vw; padding: 0.9vh 2vw; font-weight: 800;
+    font-size: 1.6vh; letter-spacing: 0.04em; background: rgba(255,176,32,0.14);
+    border-bottom: 1px solid rgba(255,176,32,0.3); color: var(--amber); }
+  #warn.show { display: flex; }
+  #warn .tri { font-size: 2vh; }
+  /* ── Main ── */
+  main { flex: 1; display: grid; grid-template-columns: 1fr 34vw; min-height: 0; }
+  #map { height: 100%; width: 100%; background: #0b1015; }
+  .leaflet-container { background: #0b1015; font-family: inherit; }
+  aside { border-left: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0;
+    background: rgba(0,0,0,0.2); }
+  .spot { flex: 1; padding: 2.4vh 2vw; display: flex; flex-direction: column; min-height: 0;
+    animation: fade 0.5s ease; }
+  .spot .cap { font-size: 1.2vh; letter-spacing: 0.28em; color: var(--dim); font-weight: 800; margin-bottom: 1.4vh; }
+  .badge { display: inline-flex; align-items: center; gap: 0.6vw; align-self: flex-start;
+    padding: 0.5vh 1.1vw; border-radius: 0.8vh; font-weight: 900; font-size: 2.4vh; letter-spacing: 0.04em;
+    font-family: 'JetBrains Mono', monospace; margin-bottom: 1.6vh; }
+  .badge.red { background: rgba(255,59,59,0.18); color: var(--red); border: 1px solid rgba(255,59,59,0.4); }
+  .badge.amber { background: rgba(255,176,32,0.16); color: var(--amber); border: 1px solid rgba(255,176,32,0.4); }
+  .badge.green { background: rgba(55,214,122,0.14); color: var(--green); border: 1px solid rgba(55,214,122,0.4); }
+  .spot .head { font-size: 4vh; font-weight: 900; line-height: 1.08; margin-bottom: 1.4vh; }
+  .spot .sub { font-size: 2.1vh; color: var(--dim); font-weight: 600; line-height: 1.3; }
+  .spot .meta { margin-top: auto; display: flex; gap: 1.6vw; font-size: 1.5vh; color: var(--dim); }
+  .spot .meta b { color: var(--ink); font-weight: 800; }
+  /* rows (trunk / ferries / trains) */
+  .rows { display: flex; flex-direction: column; gap: 1vh; overflow: hidden; }
+  .row { display: flex; align-items: center; gap: 1vw; padding: 1.1vh 0; border-bottom: 1px solid var(--line); }
+  .row:last-child { border-bottom: 0; }
+  .rd { font-family: 'JetBrains Mono', monospace; font-weight: 700; font-size: 2.2vh; min-width: 4.5vw;
+    padding: 0.3vh 0.7vw; border-radius: 0.6vh; text-align: center; }
+  .rd.red { background: rgba(255,59,59,0.16); color: var(--red); }
+  .rd.amber { background: rgba(255,176,32,0.14); color: var(--amber); }
+  .rd.green { background: rgba(55,214,122,0.12); color: var(--green); }
+  .row .txt { flex: 1; min-width: 0; font-size: 1.8vh; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .row .delay { font-family: 'JetBrains Mono', monospace; font-weight: 700; font-size: 2vh; }
+  .row .delay.up { color: var(--red); } .row .delay.ok { color: var(--green); }
+  .row.hot { animation: hot 1.6s infinite; }
+  .dotc { width: 1.1vh; height: 1.1vh; border-radius: 50%; flex-shrink: 0; }
+  .dotc.red { background: var(--red); } .dotc.amber { background: var(--amber); } .dotc.green { background: var(--green); }
+  /* ── Ticker ── */
+  footer { border-top: 1px solid var(--line); background: rgba(0,0,0,0.35); overflow: hidden; white-space: nowrap; }
+  .tick { display: inline-block; padding: 1.2vh 0; font-size: 1.9vh; font-weight: 700;
+    animation: scroll 60s linear infinite; }
+  .tick span { margin: 0 3vw; }
+  .tick .sep { color: var(--accent); }
+  .tick b.up { color: var(--red); } .tick b.ok { color: var(--green); }
+  /* progress pips */
+  .pips { display: flex; gap: 0.5vw; padding: 0 2vw 1.4vh; }
+  .pip { flex: 1; height: 0.5vh; border-radius: 0.3vh; background: rgba(255,255,255,0.1); overflow: hidden; }
+  .pip.active i { display: block; height: 100%; background: var(--accent); animation: grow var(--dwell) linear; }
+  .pip i { display: none; }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }
+  @keyframes hot { 0%,100%{background:transparent} 50%{background:rgba(255,59,59,0.08)} }
+  @keyframes fade { from{opacity:0; transform: translateY(1vh)} to{opacity:1; transform:none} }
+  @keyframes grow { from{width:0} to{width:100%} }
+  @keyframes scroll { from{transform:translateX(0)} to{transform:translateX(-50%)} }
+  .pulse-marker { border-radius: 50%; box-shadow: 0 0 0 rgba(255,59,59,0.6); animation: ring 1.6s infinite; }
+  @keyframes ring { 0%{box-shadow:0 0 0 0 rgba(255,59,59,0.5)} 70%{box-shadow:0 0 0 3vh rgba(255,59,59,0)} 100%{box-shadow:0 0 0 0 rgba(255,59,59,0)} }
+</style>
+</head>
+<body>
+  <header>
+    <div class="brand">
+      <span class="k">TRAVEL · AYRSHIRE</span>
+      <span class="n">Now <b>Ayrshire</b> Radio</span>
+    </div>
+    <span class="live"><span class="dot"></span>LIVE</span>
+    <div class="stats" id="stats"></div>
+    <div class="clock"><div class="t" id="clock">--:--</div><div class="d" id="date"></div></div>
+  </header>
+  <div id="warn"><span class="tri">⚠</span><span id="warnText"></span></div>
+  <main>
+    <div id="map"></div>
+    <aside>
+      <div class="spot" id="spot"></div>
+      <div class="pips" id="pips"></div>
+    </aside>
+  </main>
+  <footer><div class="tick" id="tick"></div></footer>
+
+<script>
+const API = '';                         // same-origin
+const STATIONS = ['AYR','KMK','TRO','IRV','ADS','LAR']; // key Ayrshire boards
+const DWELL = 9000;                      // ms per scene
+const AYR_VIEW = [55.5, -4.5];
+
+let map, markerLayer, focusMarker;
+let studio = null, ferries = [], trains = [], warnings = [];
+let scenes = [], sceneIdx = 0, timer = null;
+
+// ── boot ──────────────────────────────────────────────────────────────────
+function initMap() {
+  map = L.map('map', { zoomControl: false, attributionControl: false, keyboard: false,
+    dragging: false, scrollWheelZoom: false, doubleClickZoom: false, boxZoom: false }).setView(AYR_VIEW, 9);
+  L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', { maxZoom: 18, subdomains: 'abcd' }).addTo(map);
+  markerLayer = L.layerGroup().addTo(map);
+}
+
+function sevColor(s) { return s === 'red' ? '#ff3b3b' : s === 'amber' ? '#ffb020' : '#37d67a'; }
+function statusClass(s) { s = (s||'').toLowerCase();
+  return s.includes('red')||s.includes('sever') ? 'red' : s.includes('amber')||s.includes('delay') ? 'amber' : 'green'; }
+
+async function j(u) { try { const r = await fetch(API + u); if (!r.ok) return null; return await r.json(); } catch { return null; } }
+
+async function load() {
+  const [s, f, w] = await Promise.all([ j('/api/studio'), j('/api/traffic/ferries'), j('/api/warnings') ]);
+  if (s) studio = s;
+  if (f && Array.isArray(f.items)) ferries = f.items;
+  warnings = (w && w.met_office) || [];
+  // trains: aggregate a few boards (best-effort, may be empty overnight)
+  const boards = await Promise.all(STATIONS.map(c => j('/api/trains/board/' + c).then(b => ({ c, b }))));
+  trains = [];
+  for (const { c, b } of boards) {
+    const deps = (b && ((b.southbound&&b.southbound.departures)||[]).concat((b.northbound&&b.northbound.departures)||[])) || [];
+    for (const d of deps.slice(0, 3)) trains.push({ from: c, ...d });
+  }
+  rebuild();
+}
+
+// ── build scene list from data (data-gated) ────────────────────────────────
+function rebuild() {
+  if (!studio) return;
+  renderStats(); renderWarn(); renderMarkers(); renderTicker();
+
+  const top = (studio.top || []).filter(i => i.lat && i.lon);
+  const hot = top.filter(i => i.severity === 'red').concat(top.filter(i => i.severity !== 'red')).slice(0, 5);
+
+  scenes = [];
+  // spotlight each notable incident (map flies to it)
+  hot.forEach(i => scenes.push({ kind: 'incident', data: i }));
+  // trunk road delays overview
+  if ((studio.trunk || []).length) scenes.push({ kind: 'trunk' });
+  // ferries
+  if (ferries.length) scenes.push({ kind: 'ferries' });
+  // trains (only if something running)
+  if (trains.length) scenes.push({ kind: 'trains' });
+  // all-clear fallback
+  if (!scenes.length) scenes.push({ kind: 'clear' });
+
+  renderPips();
+  if (sceneIdx >= scenes.length) sceneIdx = 0;
+  showScene(sceneIdx);
+  if (!timer) advance();
+}
+
+function advance() {
+  clearTimeout(timer);
+  timer = setTimeout(() => { sceneIdx = (sceneIdx + 1) % scenes.length; showScene(sceneIdx); advance(); }, DWELL);
+}
+
+// ── renderers ──────────────────────────────────────────────────────────────
+function renderStats() {
+  const h = studio.headline || {};
+  const chips = [
+    ['red', h.red || 0, 'RED'], ['amber', h.amber || 0, 'AMBER'],
+    ['', h.incidents || 0, 'INCIDENTS'], ['', h.roadworks || 0, 'ROADWORKS'], ['', h.ferry || 0, 'FERRIES'],
+  ];
+  document.getElementById('stats').innerHTML = chips.map(([c, v, l]) =>
+    `<div class="stat ${c}"><div class="v">${v}</div><div class="l">${l}</div></div>`).join('');
+}
+
+function renderWarn() {
+  const el = document.getElementById('warn');
+  if (warnings.length) {
+    el.classList.add('show');
+    document.getElementById('warnText').textContent = warnings[0].title || 'Weather warning in force';
+  } else el.classList.remove('show');
+}
+
+function renderMarkers() {
+  markerLayer.clearLayers();
+  (studio.top || []).forEach(i => {
+    if (!i.lat || !i.lon) return;
+    L.circleMarker([i.lat, i.lon], { radius: 7, color: '#000', weight: 1.5,
+      fillColor: sevColor(i.severity), fillOpacity: 0.95 }).addTo(markerLayer);
+  });
+}
+
+function renderPips() {
+  document.getElementById('pips').innerHTML = scenes.map((_, i) =>
+    `<div class="pip" id="pip${i}"><i></i></div>`).join('');
+  document.documentElement.style.setProperty('--dwell', DWELL + 'ms');
+}
+function markPip(idx) {
+  scenes.forEach((_, i) => { const p = document.getElementById('pip' + i); if (p) p.classList.toggle('active', i === idx); });
+  const active = document.querySelector('#pip' + idx + ' i');
+  if (active) { active.style.animation = 'none'; void active.offsetWidth; active.style.animation = ''; }
+}
+
+function showScene(idx) {
+  const sc = scenes[idx]; if (!sc) return;
+  markPip(idx);
+  const spot = document.getElementById('spot');
+  spot.style.animation = 'none'; void spot.offsetWidth; spot.style.animation = '';
+
+  if (focusMarker) { markerLayer.removeLayer(focusMarker); focusMarker = null; }
+
+  if (sc.kind === 'incident') {
+    const i = sc.data;
+    const cls = i.severity === 'red' ? 'red' : i.severity === 'amber' ? 'amber' : 'green';
+    spot.innerHTML = `
+      <div class="cap">MOST DISRUPTIVE</div>
+      <span class="badge ${cls}">${(i.road || i.type || 'INCIDENT').toString().toUpperCase()}</span>
+      <div class="head">${esc(i.title || i.summary || 'Incident')}</div>
+      <div class="sub">${esc(i.description || i.summary || '')}</div>
+      <div class="meta"><span>${esc(i.town || i.region || 'Ayrshire')}</span><span><b>${cap(i.type || 'incident')}</b></span></div>`;
+    map.flyTo([i.lat, i.lon], 12, { duration: 1.6 });
+    focusMarker = L.marker([i.lat, i.lon], { icon: L.divIcon({ className: '',
+      html: `<div class="pulse-marker" style="width:2vh;height:2vh;background:${sevColor(i.severity)}"></div>`,
+      iconSize: [0, 0] }) }).addTo(markerLayer);
+  }
+  else if (sc.kind === 'trunk') {
+    map.flyTo(AYR_VIEW, 9, { duration: 1.6 });
+    const rows = (studio.trunk || []).slice(0, 7).map(r => {
+      const cls = statusClass(r.status);
+      const d = r.delay_min || 0;
+      return `<div class="row ${cls === 'red' ? 'hot' : ''}">
+        <span class="rd ${cls}">${esc(r.road || '')}</span>
+        <span class="txt">${r.incidents || 0} live · ${r.roadworks || 0} works</span>
+        <span class="delay ${d > 0 ? 'up' : 'ok'}">${d > 0 ? '+' + d + 'm' : 'clear'}</span></div>`;
+    }).join('');
+    spot.innerHTML = `<div class="cap">TRUNK ROADS</div><div class="rows">${rows}</div>`;
+  }
+  else if (sc.kind === 'ferries') {
+    map.flyTo([55.63, -4.9], 10, { duration: 1.6 });
+    const rows = ferries.slice(0, 7).map(f => {
+      const cls = f.severity === 'red' ? 'red' : f.severity === 'amber' ? 'amber' : 'green';
+      const fd = f.ferry_data || {};
+      return `<div class="row"><span class="dotc ${cls}"></span>
+        <span class="txt">${esc(fd.route_name || (f.title || '').split(':')[0])}</span>
+        <span class="delay ${cls === 'green' ? 'ok' : 'up'}">${esc((f.title || '').split(':')[1] || f.description || '')}</span></div>`;
+    }).join('');
+    spot.innerHTML = `<div class="cap">CALMAC FERRIES</div><div class="rows">${rows}</div>`;
+  }
+  else if (sc.kind === 'trains') {
+    map.flyTo(AYR_VIEW, 9, { duration: 1.6 });
+    const rows = trains.slice(0, 7).map(t =>
+      `<div class="row"><span class="rd amber">${esc(t.from)}</span>
+        <span class="txt">${esc(t.destination || t.dest || '')}</span>
+        <span class="delay ${(t.expected||'').toLowerCase().includes('on time')?'ok':'up'}">${esc(t.expected || t.scheduled || t.std || '')}</span></div>`).join('');
+    spot.innerHTML = `<div class="cap">SCOTRAIL — NEXT DEPARTURES</div><div class="rows">${rows}</div>`;
+  }
+  else { // clear
+    map.flyTo(AYR_VIEW, 9, { duration: 1.6 });
+    spot.innerHTML = `<div class="cap">AYRSHIRE NETWORK</div>
+      <span class="badge green">ALL CLEAR</span>
+      <div class="head">Roads running normally</div>
+      <div class="sub">No significant incidents across the trunk network.</div>`;
+  }
+}
+
+function renderTicker() {
+  const vms = (studio.vms || []).slice(0, 12).map(v => `<span>${esc(typeof v === 'string' ? v : (v.text || v.msg || ''))}</span>`);
+  const trunk = (studio.trunk || []).filter(r => (r.delay_min || 0) > 0)
+    .map(r => `<span><b class="up">${esc(r.road)} +${r.delay_min}m</b></span>`);
+  const parts = trunk.concat(vms);
+  const body = (parts.length ? parts : ['<span>Ayrshire travel — network running normally</span>'])
+    .join('<span class="sep">●</span>');
+  document.getElementById('tick').innerHTML = body + '<span class="sep">●</span>' + body;
+}
+
+function clock() {
+  const n = new Date();
+  const p = x => String(x).padStart(2, '0');
+  document.getElementById('clock').innerHTML = `${p(n.getHours())}:${p(n.getMinutes())}<span class="s">:${p(n.getSeconds())}</span>`;
+  document.getElementById('date').textContent = n.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' }).toUpperCase();
+}
+
+function esc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[c])); }
+function cap(s) { s = String(s || ''); return s.charAt(0).toUpperCase() + s.slice(1); }
+
+initMap();
+clock(); setInterval(clock, 1000);
+load(); setInterval(load, 60000);
+</script>
+</body>
+</html>
