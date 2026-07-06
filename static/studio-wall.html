@@ -66,6 +66,15 @@
   .spot .sub { font-size: 2.1vh; color: var(--dim); font-weight: 600; line-height: 1.3; }
   .spot .meta { margin-top: auto; display: flex; gap: 1.6vw; font-size: 1.5vh; color: var(--dim); }
   .spot .meta b { color: var(--ink); font-weight: 800; }
+  /* nearest live camera to the spotlighted event */
+  .cam { margin-top: 1.8vh; position: relative; border-radius: 1.2vh; overflow: hidden;
+    border: 1px solid var(--line); background: #000; flex: 1; min-height: 0; }
+  .cam img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .cam .lbl { position: absolute; left: 0; bottom: 0; right: 0; display: flex; align-items: center; gap: 0.6vw;
+    padding: 1vh 1.2vw; font-size: 1.5vh; font-weight: 800; letter-spacing: 0.04em;
+    background: linear-gradient(0deg, rgba(0,0,0,0.85), transparent); }
+  .cam .lbl .ld { width: 1vh; height: 1vh; border-radius: 50%; background: var(--red); animation: pulse 1.4s infinite; }
+  .cam .lbl .dist { margin-left: auto; color: var(--dim); font-weight: 600; }
   /* rows (trunk / ferries / trains) */
   .rows { display: flex; flex-direction: column; gap: 1vh; overflow: hidden; }
   .row { display: flex; align-items: center; gap: 1vw; padding: 1.1vh 0; border-bottom: 1px solid var(--line); }
@@ -247,6 +256,7 @@ function showScene(idx) {
       <span class="badge ${cls}">${(i.road || i.type || 'INCIDENT').toString().toUpperCase()}</span>
       <div class="head">${esc(i.title || i.summary || 'Incident')}</div>
       <div class="sub">${esc(i.description || i.summary || '')}</div>
+      ${cameraHtml(i.lat, i.lon)}
       <div class="meta"><span>${esc(i.town || i.region || 'Ayrshire')}</span><span><b>${cap(i.type || 'incident')}</b></span></div>`;
     map.flyTo([i.lat, i.lon], 12, { duration: 1.6 });
     focusMarker = L.marker([i.lat, i.lon], { icon: L.divIcon({ className: '',
@@ -319,6 +329,34 @@ function clock() {
 
 function esc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[c])); }
 function cap(s) { s = String(s || ''); return s.charAt(0).toUpperCase() + s.slice(1); }
+
+// Great-circle km between two lat/lon points.
+function haversine(la1, lo1, la2, lo2) {
+  const R = 6371, r = x => x * Math.PI / 180;
+  const dLa = r(la2 - la1), dLo = r(lo2 - lo1);
+  const h = Math.sin(dLa / 2) ** 2 + Math.cos(r(la1)) * Math.cos(r(la2)) * Math.sin(dLo / 2) ** 2;
+  return R * 2 * Math.asin(Math.sqrt(h));
+}
+// Nearest traffic camera to a point (within maxKm), from the full camera list.
+function nearestCamera(lat, lon, maxKm = 12) {
+  if (lat == null || lon == null) return null;
+  let best = null, bd = Infinity;
+  for (const c of (studio.cameras_all || [])) {
+    if (!c.lat || !c.lon || !c.url) continue;
+    const dkm = haversine(lat, lon, c.lat, c.lon);
+    if (dkm < bd) { bd = dkm; best = c; }
+  }
+  return best && bd <= maxKm ? { ...best, dist_km: bd } : null;
+}
+// Live-snapshot HTML for the nearest camera to the current event (cache-busted).
+function cameraHtml(lat, lon) {
+  const cam = nearestCamera(lat, lon);
+  if (!cam) return '';
+  return `<div class="cam">
+    <img src="${cam.url}?t=${Date.now()}" onerror="this.closest('.cam').style.display='none'">
+    <div class="lbl"><span class="ld"></span>LIVE · ${esc(cam.name)}<span class="dist">${cam.dist_km.toFixed(1)} km away</span></div>
+  </div>`;
+}
 
 initMap();
 clock(); setInterval(clock, 1000);
