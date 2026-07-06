@@ -294,9 +294,16 @@ function showScene(idx) {
 }
 
 function renderTicker() {
-  const vms = (studio.vms || []).slice(0, 12).map(v => `<span>${esc(typeof v === 'string' ? v : (v.text || v.msg || ''))}</span>`);
+  // Trunk delays first (most useful), then VMS journey-time boards.
   const trunk = (studio.trunk || []).filter(r => (r.delay_min || 0) > 0)
     .map(r => `<span><b class="up">${esc(r.road)} +${r.delay_min}m</b></span>`);
+  const vms = (studio.vms || [])
+    .filter(v => v && /JOURNEY TIME/i.test(v.message || ''))
+    .slice(0, 10)
+    .map(v => {
+      const msg = String(v.message || '').replace(/\s+/g, ' ').trim();
+      return `<span><b class="sep">${esc(v.road || '')}</b> ${esc(msg)}</span>`;
+    });
   const parts = trunk.concat(vms);
   const body = (parts.length ? parts : ['<span>Ayrshire travel — network running normally</span>'])
     .join('<span class="sep">●</span>');
