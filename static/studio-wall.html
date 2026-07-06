@@ -48,7 +48,7 @@
   #warn.show { display: flex; }
   #warn .tri { font-size: 2vh; }
   /* ── Main ── */
-  main { flex: 1; display: grid; grid-template-columns: 1fr 34vw; min-height: 0; }
+  main { flex: 1; display: grid; grid-template-columns: 1fr 34vw; min-height: 0; position: relative; }
   #map { height: 100%; width: 100%; background: #0b1015; }
   .leaflet-container { background: #0b1015; font-family: inherit; }
   aside { border-left: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0;
@@ -109,6 +109,22 @@
   @keyframes scroll { from{transform:translateX(0)} to{transform:translateX(-50%)} }
   .pulse-marker { border-radius: 50%; box-shadow: 0 0 0 rgba(255,59,59,0.6); animation: ring 1.6s infinite; }
   @keyframes ring { 0%{box-shadow:0 0 0 0 rgba(255,59,59,0.5)} 70%{box-shadow:0 0 0 3vh rgba(255,59,59,0)} 100%{box-shadow:0 0 0 0 rgba(255,59,59,0)} }
+  /* congested road segments pulse */
+  .hot-road { animation: hotroad 1.4s ease-in-out infinite; }
+  @keyframes hotroad { 0%,100%{opacity:.55} 50%{opacity:1} }
+  /* travel-time pills on the map */
+  .tt-pill { transform: translate(-50%,-140%); background: rgba(10,15,21,.9); border:1px solid var(--line);
+    border-radius: .7vh; padding: .3vh .6vw; font-weight: 800; font-size: 1.4vh; white-space: nowrap;
+    font-family: 'JetBrains Mono', monospace; box-shadow: 0 2px 8px rgba(0,0,0,.5); }
+  .tt-pill.red { color:#ff6b6b; border-color: rgba(255,59,59,.5); }
+  .tt-pill.amber { color:#ffc24d; border-color: rgba(255,176,32,.5); }
+  .tt-pill.green { color:#5fe39a; }
+  /* road-status legend */
+  #legend { position:absolute; left:1.2vw; bottom:1.2vh; z-index:500; display:flex; gap:1vw;
+    background: rgba(10,15,21,.82); border:1px solid var(--line); border-radius:1vh; padding:.7vh 1vw;
+    font-size:1.2vh; font-weight:700; letter-spacing:.02em; }
+  #legend s { text-decoration:none; display:inline-flex; align-items:center; gap:.4vw; color: var(--ink); }
+  #legend .ln { width:1.6vw; height:.5vh; border-radius:.3vh; display:inline-block; }
 </style>
 </head>
 <body>
@@ -124,6 +140,11 @@
   <div id="warn"><span class="tri">⚠</span><span id="warnText"></span></div>
   <main>
     <div id="map"></div>
+    <div id="legend">
+      <s><span class="ln" style="background:#37d67a"></span>Clear</s>
+      <s><span class="ln" style="background:#ffb020"></span>Busy</s>
+      <s><span class="ln" style="background:#ff3b3b"></span>Delays</s>
+    </div>
     <aside>
       <div class="spot" id="spot"></div>
       <div class="pips" id="pips"></div>
@@ -134,10 +155,12 @@
 <script>
 const API = '';                         // same-origin
 const STATIONS = ['AYR','KMK','TRO','IRV','ADS','LAR']; // key Ayrshire boards
+const TRUNK_ROADS = ['M77','A77','A78','A76','A719','A737','A736','A71','A70']; // coloured network
 const DWELL = 9000;                      // ms per scene
 const AYR_VIEW = [55.5, -4.5];
+const ROAD_COL = { green:'#37d67a', amber:'#ffb020', red:'#ff3b3b' };
 
-let map, markerLayer, focusMarker;
+let map, markerLayer, roadLayer, focusMarker;
 let studio = null, ferries = [], trains = [], warnings = [];
 let scenes = [], sceneIdx = 0, timer = null;
 
@@ -146,7 +169,35 @@ function initMap() {
   map = L.map('map', { zoomControl: false, attributionControl: false, keyboard: false,
     dragging: false, scrollWheelZoom: false, doubleClickZoom: false, boxZoom: false }).setView(AYR_VIEW, 9);
   L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', { maxZoom: 18, subdomains: 'abcd' }).addTo(map);
+  roadLayer = L.layerGroup().addTo(map);     // coloured road network — under markers
   markerLayer = L.layerGroup().addTo(map);
+}
+
+// Fetch each trunk road's geometry + congestion once, colour it by live status, and
+// drop travel-time pills at the worst delays. Roads change slowly → cache geometry.
+let roadCache = {};
+async function loadRoads() {
+  const statusByCode = {};
+  (studio && studio.trunk || []).forEach(r => { statusByCode[r.road] = r; });
+  await Promise.all(TRUNK_ROADS.map(async code => {
+    if (!roadCache[code]) { const r = await j('/api/road/' + code); if (r && Array.isArray(r.geometry)) roadCache[code] = r; }
+  }));
+  roadLayer.clearLayers();
+  for (const code of TRUNK_ROADS) {
+    const r = roadCache[code]; if (!r) continue;
+    const live = statusByCode[code] || {};
+    const cls = statusClass(live.status || r.status);
+    const col = ROAD_COL[cls] || '#5a6b7e';
+    L.polyline(r.geometry, { color: col, weight: 5, opacity: cls === 'green' ? 0.45 : 0.9, lineCap: 'round', lineJoin: 'round' }).addTo(roadLayer);
+    if (Array.isArray(r.hot_geometry) && r.hot_geometry.length)   // congested stretch, bright + pulsing
+      L.polyline(r.hot_geometry, { color: '#ff3b3b', weight: 9, opacity: 0.95, lineCap: 'round', className: 'hot-road' }).addTo(roadLayer);
+  }
+  // travel-time pills at the worst delays (located)
+  (studio && studio.worst_delays || []).filter(w => w.lat && w.lon && (w.delay_min || 0) >= 1).slice(0, 6).forEach(w => {
+    const cls = w.severity || statusClass(w.status);
+    L.marker([w.lat, w.lon], { icon: L.divIcon({ className: '',
+      html: `<div class="tt-pill ${cls}">${esc(w.road || '')} +${Math.round(w.delay_min)}m</div>`, iconSize: [0, 0] }) }).addTo(roadLayer);
+  });
 }
 
 function sevColor(s) { return s === 'red' ? '#ff3b3b' : s === 'amber' ? '#ffb020' : '#37d67a'; }
@@ -168,6 +219,7 @@ async function load() {
     for (const d of deps.slice(0, 3)) trains.push({ from: c, ...d });
   }
   rebuild();
+  loadRoads();
 }
 
 // ── build scene list from data (data-gated) ────────────────────────────────
@@ -176,12 +228,19 @@ function rebuild() {
   renderStats(); renderWarn(); renderMarkers(); renderTicker();
 
   const top = (studio.top || []).filter(i => i.lat && i.lon);
-  const hot = top.filter(i => i.severity === 'red').concat(top.filter(i => i.severity !== 'red')).slice(0, 5);
+  const incidents = top.filter(i => (i.type || '').toLowerCase() !== 'tro');   // real live incidents
+  const tros = top.filter(i => (i.type || '').toLowerCase() === 'tro' && i.severity === 'red');
+  // significant events: every real incident, then only notable closures (fewer when
+  // there are live incidents to lead with) — never spotlight every routine TRO.
+  const events = incidents.concat(tros.slice(0, incidents.length ? 2 : 5));
+  const delays = (studio.worst_delays || []).filter(w => w.lat && w.lon && (w.delay_min || 0) >= 2);
 
   scenes = [];
-  // spotlight each notable incident (map flies to it)
-  hot.forEach(i => scenes.push({ kind: 'incident', data: i }));
-  // trunk road delays overview
+  // major impact first — worst travel-time delays / congestion
+  if (delays.length) scenes.push({ kind: 'delays' });
+  // then live incidents / significant closures (map flies to each)
+  events.slice(0, 5).forEach(i => scenes.push({ kind: 'incident', data: i }));
+  // trunk road status overview
   if ((studio.trunk || []).length) scenes.push({ kind: 'trunk' });
   // ferries
   if (ferries.length) scenes.push({ kind: 'ferries' });
@@ -222,11 +281,16 @@ function renderWarn() {
 
 function renderMarkers() {
   markerLayer.clearLayers();
-  (studio.top || []).forEach(i => {
-    if (!i.lat || !i.lon) return;
-    L.circleMarker([i.lat, i.lon], { radius: 7, color: '#000', weight: 1.5,
-      fillColor: sevColor(i.severity), fillOpacity: 0.95 }).addTo(markerLayer);
-  });
+  const top = (studio.top || []).filter(i => i.lat && i.lon);
+  const incidents = top.filter(i => (i.type || '').toLowerCase() !== 'tro');
+  const tros = top.filter(i => (i.type || '').toLowerCase() === 'tro' && i.severity === 'red')
+    .slice(0, incidents.length ? 3 : 8);   // only notable closures, not every TRO
+  // real incidents: big, bright
+  incidents.forEach(i => L.circleMarker([i.lat, i.lon], { radius: 9, color: '#000', weight: 2,
+    fillColor: sevColor(i.severity), fillOpacity: 0.95 }).addTo(markerLayer));
+  // significant closures: smaller, dimmer
+  tros.forEach(i => L.circleMarker([i.lat, i.lon], { radius: 5, color: '#000', weight: 1,
+    fillColor: sevColor(i.severity), fillOpacity: 0.6 }).addTo(markerLayer));
 }
 
 function renderPips() {
@@ -248,7 +312,21 @@ function showScene(idx) {
 
   if (focusMarker) { markerLayer.removeLayer(focusMarker); focusMarker = null; }
 
-  if (sc.kind === 'incident') {
+  if (sc.kind === 'delays') {
+    const ds = (studio.worst_delays || []).filter(w => w.lat && w.lon && (w.delay_min || 0) >= 2)
+      .sort((a, b) => (b.delay_min || 0) - (a.delay_min || 0)).slice(0, 7);
+    if (ds[0]) map.flyTo([ds[0].lat, ds[0].lon], 11, { duration: 1.6 });
+    const rows = ds.map(w => {
+      const cls = w.severity || statusClass(w.status);
+      const congPct = w.congestion != null ? Math.round(w.congestion * 100) + '% busy' : (w.status || '');
+      return `<div class="row ${cls === 'red' ? 'hot' : ''}">
+        <span class="rd ${cls}">${esc(w.road || '')}</span>
+        <span class="txt">${esc(w.name || congPct)}</span>
+        <span class="delay up">+${Math.round(w.delay_min)}m</span></div>`;
+    }).join('');
+    spot.innerHTML = `<div class="cap">TRAVEL TIMES · WORST DELAYS</div><div class="rows">${rows}</div>`;
+  }
+  else if (sc.kind === 'incident') {
     const i = sc.data;
     const cls = i.severity === 'red' ? 'red' : i.severity === 'amber' ? 'amber' : 'green';
     spot.innerHTML = `
