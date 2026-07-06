@@ -230,14 +230,12 @@ async function load() {
   if (s) studio = s;
   if (f && Array.isArray(f.items)) ferries = f.items;
   warnings = (w && w.met_office) || [];
-  // trains: aggregate a few boards (best-effort, may be empty overnight)
-  const boards = await Promise.all(STATIONS.map(c => j('/api/trains/board/' + c).then(b => ({ c, b }))));
-  trains = [];
-  for (const { c, b } of boards) {
-    const deps = (b && ((b.southbound&&b.southbound.departures)||[]).concat((b.northbound&&b.northbound.departures)||[])) || [];
-    for (const d of deps.slice(0, 3)) trains.push({ from: c, ...d });
-  }
-  // soonest departures first (scheduled is "HH:MM")
+  // trains: the tracker only serves the Ayr–Glasgow line (it ignores CRS), so show
+  // that real board — not faked per-station data. Merge both directions, time-sorted.
+  const board = await j('/api/trains/board/AYR');
+  const nb = (board && board.northbound && board.northbound.departures) || [];
+  const sb = (board && board.southbound && board.southbound.departures) || [];
+  trains = nb.concat(sb);
   trains.sort((a, b) => String(a.scheduled || a.std || '').localeCompare(String(b.scheduled || b.std || '')));
   rebuild();
   loadRoads();
@@ -406,17 +404,17 @@ function showScene(idx) {
   }
   else if (sc.kind === 'trains') {
     map.flyTo(AYR_VIEW, 9, { duration: 1.6 });
-    const rows = trains.slice(0, 7).map(t => {
+    const rows = trains.slice(0, 8).map(t => {
       const time = t.scheduled || t.std || '—';                 // actual departure time
       const exp = String(t.expected || t.etd || '').trim();      // "On Time" / revised time / "Cancelled"
       const cancelled = /cancel/i.test(exp);
       const delayed = /^\d{1,2}:\d{2}$/.test(exp) && exp !== time;
-      const label = cancelled ? time + ' · CANC' : (delayed ? time + ' → ' + exp : time);
-      return `<div class="row"><span class="rd amber">${esc(t.from)}</span>
-        <span class="txt">${esc(t.destination || t.dest || '')}</span>
-        <span class="delay ${cancelled || delayed ? 'up' : 'ok'}">${esc(label)}</span></div>`;
+      const status = cancelled ? 'CANC' : (delayed ? 'exp ' + exp : 'On time');
+      return `<div class="row"><span class="rd amber">${esc(time)}</span>
+        <span class="txt">${esc(t.destination || t.dest || '')}${t.platform ? ' · Pl ' + esc(t.platform) : ''}</span>
+        <span class="delay ${cancelled || delayed ? 'up' : 'ok'}">${esc(status)}</span></div>`;
     }).join('');
-    spot.innerHTML = `<div class="cap">SCOTRAIL — NEXT DEPARTURES</div><div class="rows">${rows}</div>`;
+    spot.innerHTML = `<div class="cap">SCOTRAIL · AYR — GLASGOW LINE</div><div class="rows">${rows}</div>`;
   }
   else { // clear
     map.flyTo(AYR_VIEW, 9, { duration: 1.6 });
