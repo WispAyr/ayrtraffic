@@ -1157,6 +1157,11 @@
     .leaflet-container .leaflet-marker-pane,
     .leaflet-container .leaflet-overlay-pane,
     .leaflet-container .leaflet-heatmap-layer { transition: filter 0.35s, opacity 0.35s; }
+    /* Hide the congestion heat while the map flies between roads. leaflet.heat
+       only reprojects on moveend, so during a flyTo the heat canvas visibly
+       floats/detaches. Fade it out on any movement and let it fade back in,
+       redrawn, once the map settles. */
+    #map.map-moving .leaflet-heatmap-layer { opacity: 0 !important; }
 
     /* Road focus indicator chip floating over the map */
     #road-focus-chip {
@@ -1393,6 +1398,12 @@ const map = L.map('map', {
   preferCanvas: true,
 }).setView([55.55, -4.55], 10);
 L.control.zoom({ position: 'topright' }).addTo(map);
+
+// Fade the heat layer out during map motion so it doesn't float. leaflet.heat
+// can't follow flyTo animations (it only reprojects on moveend), so we hide it
+// while moving via the #map.map-moving CSS rule and reveal it, settled, at rest.
+map.on('movestart zoomstart', () => map.getContainer().classList.add('map-moving'));
+map.on('moveend zoomend',     () => map.getContainer().classList.remove('map-moving'));
 
 L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
   maxZoom: 19,
